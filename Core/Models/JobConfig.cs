@@ -5,7 +5,6 @@ public sealed class JobConfig
     public required string RootPath { get; init; }
 
     public ParallelismLevel Parallelism { get; init; } = ParallelismLevel.Normal;
-    public CompressionStrategyKind Strategy { get; init; } = CompressionStrategyKind.Fast; // Safe needs file watching (v2)
 
     /// <summary>
     /// 7-Zip <c>-mx</c>: 0 (store) to 9 (ultra). Memory use grows with level and threads; keep old hardware at 5 or below.
@@ -14,7 +13,12 @@ public sealed class JobConfig
 
     public CollisionBehavior CollisionBehavior { get; init; } = CollisionBehavior.RenameNew;
     public LockedFileBehavior LockedFileBehavior { get; init; } = LockedFileBehavior.Skip;
+
+    /// <summary>
+    /// What to do when a source file changes during the job. Has no effect until file watching exists (v2).
+    /// </summary>
     public SourceChangeBehavior SourceChangeBehavior { get; init; } = SourceChangeBehavior.CancelSubJob;
+
     public bool DeleteAfterVerify { get; init; } = false;
 
     /// <summary>

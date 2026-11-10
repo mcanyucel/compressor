@@ -22,7 +22,8 @@ Goals:
 | -- | -- |
 | **UI: Avalonia instead of WPF** | FOSS project: contributors on Linux/macOS can build and run the UI. Same XAML + MVVM model as WPF, and CommunityToolkit.Mvvm works unchanged. |
 | **Compression engine: bundled 7-Zip command line instead of SharpCompress** | Native, multithreaded LZMA2 is much faster than a managed implementation and is battle-tested. 7-Zip also handles verification (`t` and `l` commands). See [Bundling 7-Zip](#bundling-7-zip). |
-| **File watching and the Safe strategy deferred to v2** | Folders being archived are normally idle. v1 treats sources as static and relies on pre-flight checks plus post-compression verification. The FSW design is kept below, marked v2. |
+| **File watching deferred to v2** | Folders being archived are normally idle. v1 treats sources as static and relies on pre-flight checks plus post-compression verification. The FSW design is kept below, marked v2. |
+| **One compression strategy (Fast and Safe merged)** | With 7-Zip as a subprocess, cancellation always kills the process, so the strategies had become identical. Reacting to source changes belongs to the executor and is controlled by `SourceChangeBehavior`. |
 | **Console front end alongside the GUI** | Lets the engine be tested end-to-end before the UI exists, runs on CI, and gives power users something to script. |
 
 ---
@@ -144,7 +145,6 @@ public sealed class JobConfig
     public string                  RootPath             { get; init; }
     public ParallelismLevel        Parallelism          { get; init; } = ParallelismLevel.Normal;
     public int                     CompressionLevel     { get; init; } = 5;     // 7-Zip -mx (0-9)
-    public CompressionStrategyKind Strategy             { get; init; } = CompressionStrategyKind.Fast; // Safe is v2
     public CollisionBehavior       CollisionBehavior    { get; init; } = CollisionBehavior.RenameNew;
     public LockedFileBehavior      LockedFileBehavior   { get; init; } = LockedFileBehavior.Skip;
     public SourceChangeBehavior    SourceChangeBehavior { get; init; } = SourceChangeBehavior.CancelSubJob; // v2
@@ -204,7 +204,7 @@ Rationale: LZMA2 splits large inputs into blocks, so one big folder benefits fro
 
 ## Strategy Pattern
 
-Pre-flight is strategy-agnostic and always runs. Strategies only differ in what happens during execution:
+Pre-flight always runs and doesn't depend on the strategy. The strategy defines how one item is compressed:
 
 ```csharp
 public interface ICompressionStrategy
@@ -213,11 +213,13 @@ public interface ICompressionStrategy
 }
 ```
 
-**v1** ships a single strategy that runs 7-Zip (`SevenZipStrategy`, replacing the current `FastStrategy`). It does not consume FSW events, but it still honours the per-item and global cancellation tokens.
+There is one implementation, `SevenZipStrategy`, which runs 7-Zip. Cancelling its token (per-item cancel, the global stop button, or the v2 file watcher cancelling `JobItem.Cts`) kills the 7-Zip process.
 
-**v2** adds `SafeStrategy`: the same 7-Zip invocation, plus FSW-driven cancellation for live machines. See the FSW section below.
+An earlier design had two strategies: `Fast` (no file watching) and `Safe` (checks for cancellation between files, for live machines). With 7-Zip running as a separate process there is no "between files" any more, so they were merged. Whether to react to source changes is now an executor concern, controlled by `SourceChangeBehavior` (`CancelSubJob` or `Ignore`).
 
-Shared implementation lives in static helpers used by all strategies: building the file list, running 7-Zip, the `.7z.tmp` rename, and post-compression verification.
+The interface stays so the executor can be tested with a fake strategy.
+
+Shared implementation lives in static helpers: building the file list, running 7-Zip, the `.7z.tmp` rename, and post-compression verification.
 
 ---
 
@@ -652,8 +654,7 @@ Compressor/
 │   │   └── JobFile.cs                  // JSON load / save
 │   ├── Strategies/
 │   │   ├── ICompressionStrategy.cs
-│   │   ├── SevenZipStrategy.cs         // v1
-│   │   └── SafeStrategy.cs             // v2 (FSW)
+│   │   └── SevenZipStrategy.cs
 │   ├── SevenZip/
 │   │   ├── SevenZipLocator.cs          // find bundled/configured binary, check hash
 │   │   └── SevenZipRunner.cs           // process wrapper: args, progress parsing, exit codes, kill on cancel

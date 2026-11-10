@@ -26,18 +26,6 @@ public enum ParallelismLevel
     Maximum     // ProcessorCount
 }
 
-public enum CompressionStrategyKind
-{
-    /// <summary>
-    /// No FSW, no reactive handling
-    /// </summary>
-    Fast,
-    /// <summary>
-    /// FSW + per-item cancellationtokensource
-    /// </summary>
-    Safe
-}
-
 public enum CollisionBehavior
 {
     /// <summary>
