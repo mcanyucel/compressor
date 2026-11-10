@@ -9,10 +9,12 @@ namespace Core.Execution;
 /// Runs a sealed, pre-flighted <see cref="BackupJob"/>: compresses and verifies items in parallel and moves each
 /// <see cref="JobItem"/> through its states.
 ///
-/// Per item: <c>Pending → InProgress → Verified → Done</c>, or one of the other terminal states:
+/// Per item: <c>Pending → InProgress → Verified → Done</c> (with <c>DeleteAfterVerify</c>, originals are deleted
+/// between <c>Verified</c> and <c>Done</c>), or one of the other terminal states:
 /// <list type="bullet">
 /// <item><c>Skipped</c>: nothing to compress.</item>
-/// <item><c>NeedsAttention</c>: 7-Zip warnings (archive kept as <c>.7z.tmp</c>) or failed verification (archive kept as <c>.7z</c>).</item>
+/// <item><c>NeedsAttention</c>: 7-Zip warnings (archive kept as <c>.7z.tmp</c>), failed verification (archive kept as <c>.7z</c>),
+/// or some originals not deleted because they changed or couldn't be deleted (archive verified).</item>
 /// <item><c>Failed</c>: no archive produced.</item>
 /// <item><c>Cancelled</c>: per-item cancel or the global stop.</item>
 /// </list>
@@ -31,9 +33,6 @@ public sealed class JobExecutor(ICompressionStrategy strategy)
     {
         if (job.OverallState != JobState.ReadyToExecute)
             throw new InvalidOperationException($"Job must be sealed and pre-flighted before execution (state: {job.OverallState}).");
-
-        if (job.Config.DeleteAfterVerify)
-            throw new NotSupportedException("Deleting originals after verification is not implemented yet.");
 
         // Largest first: long items start early instead of running alone at the end.
         List<JobItem> items = job.Items.Values
@@ -124,7 +123,19 @@ public sealed class JobExecutor(ICompressionStrategy strategy)
 
             Transition(item, JobItemState.Verified, stateProgress);
 
-            // Delete-after-verify will run here, between Verified and Done.
+            if (config.DeleteAfterVerify)
+            {
+                // Deliberately not cancellable; see OriginalsDeleter.
+                DeletionResult deletion = OriginalsDeleter.Delete(item, compression.Files);
+                item.Stats = item.Stats with { FilesDeleted = deletion.Deleted };
+
+                if (!deletion.Complete)
+                {
+                    Fail(item, JobItemState.NeedsAttention, DescribeKept(deletion), stateProgress);
+                    return;
+                }
+            }
+
             Transition(item, JobItemState.Done, stateProgress);
         }
         catch (OperationCanceledException) when (linked.IsCancellationRequested)
@@ -140,6 +151,17 @@ public sealed class JobExecutor(ICompressionStrategy strategy)
         {
             Fail(item, JobItemState.Failed, $"Unexpected error: {ex.Message}", stateProgress, ex);
         }
+    }
+
+    private static string DescribeKept(DeletionResult deletion)
+    {
+        const int maxListed = 20;
+        var lines = deletion.Kept.Take(maxListed).ToList();
+        if (deletion.Kept.Count > maxListed)
+            lines.Add($"... and {deletion.Kept.Count - maxListed} more");
+
+        return $"The archive is verified, but {deletion.Kept.Count} original file(s) were kept " +
+               $"({deletion.Deleted} deleted):\n{string.Join("\n", lines)}";
     }
 
     private static void Fail(JobItem item, JobItemState state, string message, IProgress<JobStateChange>? stateProgress, Exception? ex = null)

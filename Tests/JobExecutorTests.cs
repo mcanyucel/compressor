@@ -110,14 +110,100 @@ public class JobExecutorTests : IDisposable
     }
 
     [Fact]
-    public async Task Guards()
+    public async Task RequiresPreflight()
     {
         var notPreflighted = new BackupJob { Config = Config };
         notPreflighted.Seal();
         await Assert.ThrowsAsync<InvalidOperationException>(() => new JobExecutor(new FakeStrategy()).RunAsync(notPreflighted, null, default));
+    }
 
-        BackupJob deleting = TestJobs.Ready(new JobConfig { RootPath = _dir.Root, DeleteAfterVerify = true }, [Item("d")]);
-        await Assert.ThrowsAsync<NotSupportedException>(() => new JobExecutor(new FakeStrategy()).RunAsync(deleting, null, default));
+    // ── Delete after verify ──────────────────────────────────────────────────────────
+
+    private JobConfig DeletingConfig => new() { RootPath = _dir.Root, DeleteAfterVerify = true };
+
+    [Fact]
+    public async Task DeleteAfterVerify_DeletesOriginals_ThenDone()
+    {
+        _dir.WriteFile(Path.Combine("docs", "a.txt"));
+        _dir.WriteFile(Path.Combine("docs", "sub", "b.txt"));
+        var fake = new FakeStrategy();
+        fake.Behaviors["docs"] = new(CompressionOutcome.Completed, RealFiles: true);
+        JobItem item = Item("docs");
+
+        await new JobExecutor(fake).RunAsync(TestJobs.Ready(DeletingConfig, [item]), null, default);
+
+        Assert.Equal(JobItemState.Done, item.State);
+        Assert.Equal(2, item.Stats?.FilesDeleted);
+        Assert.False(Directory.Exists(_dir.P("docs")));
+    }
+
+    [Fact]
+    public async Task DeleteAfterVerify_FailedVerification_DeletesNothing()
+    {
+        string a = _dir.WriteFile(Path.Combine("docs", "a.txt"));
+        var fake = new FakeStrategy();
+        fake.Behaviors["docs"] = new(CompressionOutcome.Completed, VerifyProblem: "CRC Failed", RealFiles: true);
+        JobItem item = Item("docs");
+
+        await new JobExecutor(fake).RunAsync(TestJobs.Ready(DeletingConfig, [item]), null, default);
+
+        Assert.Equal(JobItemState.NeedsAttention, item.State);
+        Assert.True(File.Exists(a));
+    }
+
+    [Fact]
+    public async Task DeleteAfterVerify_FileChangedAfterArchiving_IsKept_NeedsAttention()
+    {
+        string a = _dir.WriteFile(Path.Combine("docs", "a.txt"));
+        string b = _dir.WriteFile(Path.Combine("docs", "b.txt"));
+        var fake = new FakeStrategy();
+        fake.Behaviors["docs"] = new(CompressionOutcome.Completed, RealFiles: true, ChangeDuringVerify: "b.txt");
+        JobItem item = Item("docs");
+
+        await new JobExecutor(fake).RunAsync(TestJobs.Ready(DeletingConfig, [item]), null, default);
+
+        Assert.Equal(JobItemState.NeedsAttention, item.State);
+        Assert.Contains("b.txt: changed since it was archived", item.Error?.Message);
+        Assert.False(File.Exists(a));
+        Assert.True(File.Exists(b));
+        Assert.Equal(1, item.Stats?.FilesDeleted);
+    }
+
+    [SevenZipFact]
+    public async Task EndToEnd_DeleteAfterVerify()
+    {
+        _dir.WriteText(Path.Combine("Docs", "a.txt"), 5_000);
+        _dir.WriteFile(Path.Combine("Docs", "sub", "b.txt"));
+        _dir.Dir(Path.Combine("Docs", "empty-before"));
+        _dir.WriteFile(Path.Combine("Projects", "src", "main.cs"));
+        string skipped = _dir.WriteFile(Path.Combine("Projects", "bin", "app.dll"));
+        var config = new JobConfig
+        {
+            RootPath = _dir.Root,
+            DeleteAfterVerify = true,
+            Rules =
+            [
+                new() { RelativePath = "Docs", Action = JobAction.Compress },
+                new() { RelativePath = "Projects", Action = JobAction.Compress },
+                new() { RelativePath = Path.Combine("Projects", "bin"), Action = JobAction.Skip }
+            ]
+        };
+
+        BackupJob job = JobBuilder.Build(config);
+        await PreflightRunner.RunAsync(job);
+        await new JobExecutor(new SevenZipStrategy(TestSevenZip.Runner())).RunAsync(job, null, default);
+
+        Assert.Equal(JobState.Completed, job.OverallState);
+
+        // Docs: files gone, the folder that was already empty stays, the archive has the files.
+        Assert.Equal([_dir.P(Path.Combine("Docs", "empty-before"))], Directory.GetFileSystemEntries(_dir.P("Docs")));
+        var docs = await TestSevenZip.Runner().ListAsync(_dir.P("Docs.7z"), default);
+        Assert.Equal(["a.txt", Path.Combine("sub", "b.txt")], docs.Entries.Where(e => !e.IsDirectory).Select(e => e.Path).Order());
+
+        // Projects: src archived and deleted; the skipped bin folder is untouched.
+        Assert.False(Directory.Exists(_dir.P(Path.Combine("Projects", "src"))));
+        Assert.True(File.Exists(skipped));
+        Assert.True(File.Exists(_dir.P("Projects.7z")));
     }
 
     /// <summary>
@@ -157,7 +243,11 @@ public class JobExecutorTests : IDisposable
         Assert.True(docs.Stats!.BytesAfter < docs.Stats.BytesBefore / 5);
     }
 
-    private sealed record Behavior(CompressionOutcome Outcome, string? Message = null, string? VerifyProblem = null, bool Throw = false);
+    /// <param name="RealFiles">Report the item's real files as archived (needed for deletion tests).</param>
+    /// <param name="ChangeDuringVerify">A file (relative to the item) to modify during verification.</param>
+    private sealed record Behavior(
+        CompressionOutcome Outcome, string? Message = null, string? VerifyProblem = null, bool Throw = false,
+        bool RealFiles = false, string? ChangeDuringVerify = null);
 
     /// <summary>
     /// Records start order and peak concurrency; outcomes are configured per item folder name.
@@ -186,7 +276,14 @@ public class JobExecutorTests : IDisposable
                 Behavior behavior = Behaviors.GetValueOrDefault(name) ?? new Behavior(CompressionOutcome.Completed);
                 if (behavior.Throw) throw new InvalidOperationException("boom");
                 if (behavior.Outcome == CompressionOutcome.Completed) await File.WriteAllTextAsync(item.OutputPath, "archive", ct);
-                return new CompressionResult(behavior.Outcome, behavior.Message) { Files = [new ArchivedFile("x.txt", 10, DateTime.UtcNow)] };
+
+                List<ArchivedFile> files = behavior.RealFiles
+                    ? CompressionHelpers.CollectFiles(item)
+                        .Select(f => new ArchivedFile(Path.GetRelativePath(item.SourcePath, f.FullName), f.Length, f.LastWriteTimeUtc))
+                        .ToList()
+                    : [new ArchivedFile("x.txt", 10, DateTime.UtcNow)];
+
+                return new CompressionResult(behavior.Outcome, behavior.Message) { Files = files };
             }
             finally
             {
@@ -197,6 +294,9 @@ public class JobExecutorTests : IDisposable
         public Task<VerificationResult> VerifyItemAsync(JobItem item, CompressionResult compression, CancellationToken ct)
         {
             Behavior? behavior = Behaviors.GetValueOrDefault(Path.GetFileName(item.SourcePath));
+            if (behavior?.ChangeDuringVerify is { } relative)
+                File.AppendAllText(Path.Combine(item.SourcePath, relative), " changed");
+
             return Task.FromResult(behavior?.VerifyProblem is { } problem ? new VerificationResult([problem]) : VerificationResult.Success);
         }
     }

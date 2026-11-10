@@ -261,6 +261,19 @@ This is stricter than comparing file counts, which would miss one file skipped a
 
 The recorded modified times are for the delete step: a source file that changed after compression must not be deleted.
 
+### Deleting Originals
+
+With `DeleteAfterVerify`, `OriginalsDeleter` runs between `Verified` and `Done`. It is the only code that deletes user files, so every rule errs on the side of keeping:
+
+* Only files in the archived list (`CompressionResult.Files`) are candidates. Excluded subfolders, lock files, links and files added since compression are never touched.
+* A file is deleted only if its size and last-write time still match what was archived. Otherwise it is kept.
+* Only folders that became empty because of these deletions are removed, deepest first, never recursively. A folder that was already empty was not archived, so it stays; a folder that still holds anything (even a hidden file or a junction) stays.
+* Read-only files are deleted (the flag is cleared first): they are safely in the archive.
+* Files that already disappeared are counted, not treated as problems.
+* It is not cancellable: once it starts it finishes, so the result always describes the whole item.
+
+If any archived file is kept (changed, locked, or outside the item's folder), the item becomes `NeedsAttention` with the list; the verified archive stays. For a file item, only the file is deleted; its parent folder stays even if empty.
+
 Writing to `.7z.tmp` first means interrupted jobs leave no orphan corrupted .7z files. On next launch, stale `.7z.tmp` files are detected and either cleaned up or flagged.
 
 ### 7-Zip Invocation
@@ -445,14 +458,15 @@ State mapping per item:
 | Compressed and verified | `InProgress → Verified → Done` (stats recorded) |
 | Nothing to compress | `Skipped` |
 | 7-Zip warnings (e.g. locked file) | `NeedsAttention`, archive kept as `.7z.tmp` |
-| Verification failed | `NeedsAttention`, archive kept as `.7z` |
+| Verification failed | `NeedsAttention`, archive kept as `.7z`, nothing deleted |
+| Some originals kept by the delete step (changed, locked) | `NeedsAttention`, archive verified |
 | 7-Zip failed, unreadable source, unexpected exception | `Failed`, no archive |
 | Item cancelled (before or during) | `Cancelled` |
 | Global stop | running and queued items → `Cancelled`; job → `JobState.Cancelled` |
 
 The job ends as `Completed`, or `CompletedWithErrors` if any item is `NeedsAttention`, `Failed` or `Cancelled`.
 
-Delete-after-verify will run between `Verified` and `Done`. Until it exists, `RunAsync` refuses a job with `DeleteAfterVerify = true`.
+With `DeleteAfterVerify`, originals are deleted between `Verified` and `Done` (see Deleting Originals). `Stats.FilesDeleted` records how many.
 
 ---
 
@@ -470,7 +484,7 @@ Hidden and system files are included.
 
 `root/sub1/sub2/sub3` where all are empty. The list file passed to 7-Zip contains only files, so empty directories are not stored. An item with no files is left in place - no archive produced, no deletion. Log in preflight.
 
-Open point: an empty subfolder *inside* a unit that does contain files is not stored either, so delete-after-verify would lose it. Either add directory entries to the list file (without letting 7-Zip recurse into them), or keep empty subfolders when deleting originals.
+An empty subfolder *inside* a unit that does contain files is not stored either. Decided: the delete step keeps it, since it only removes folders that its own deletions emptied. The structure stays on disk, next to the archive.
 
 ### Lock Files
 
@@ -747,6 +761,5 @@ SharpCompress has been removed; all compression and verification goes through 7-
 * VSS (Volume Shadow Copy): Not in v1. The correct solution for backing up fully live systems, but out of scope for the targeted use case of relatively older PC backup.
 * Sidecar manifest: A small json files next to each archive with metadata.
 * App license: pick one (MIT, GPL-3.0, ...). Bundling the unmodified 7-Zip binary is compatible with either.
-* Empty subfolders inside a unit (see Edge Cases).
 * Benchmark the thread-budget defaults (see Parallelism) on old hardware.
 * NTFS compression (`compact /exe:lzx`) as an alternative mode for nodes that should stay fully browsable on NTFS drives.

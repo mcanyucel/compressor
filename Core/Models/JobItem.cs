@@ -6,12 +6,15 @@ public sealed class JobItemError
     public Exception? Exception { get; init; }
 }
 
-public sealed class JobItemStats
+public sealed record JobItemStats
 {
     public TimeSpan Duration { get; init; }
     public long BytesBefore { get; init; }
     public long BytesAfter { get; init; }
     public int FileCount { get; init;  }
+
+    /// <summary>Originals deleted after verification (0 unless <c>DeleteAfterVerify</c> is on).</summary>
+    public int FilesDeleted { get; init; }
     
     public double CompressionRatio => BytesBefore > 0
     ? 1.0 - (double)BytesAfter / BytesBefore

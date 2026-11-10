@@ -69,7 +69,7 @@ public static class RunCommand
             return ExitCodes.Ok;
         }
 
-        if (!args.Has("--yes") && !Confirm())
+        if (!args.Has("--yes") && !Confirm(job.Config.DeleteAfterVerify))
             return ExitCodes.Cancelled;
 
         // ── Execute ──────────────────────────────────────────────────────────────────
@@ -103,6 +103,9 @@ public static class RunCommand
         Console.WriteLine($"Job:     {root}");
         Console.WriteLine($"7-Zip:   {sevenZip.Path} ({sevenZip.Source.ToString().ToLowerInvariant()})");
         Console.WriteLine($"Threads: {job.Config.ConcurrentItems} item(s) at a time x {job.Config.ThreadsPerItem} thread(s), level {job.Config.CompressionLevel}");
+        Console.WriteLine(job.Config.DeleteAfterVerify
+            ? "Originals: DELETED after each archive is verified (only files that are unchanged since archiving)"
+            : "Originals: kept (deleteAfterVerify is off)");
         Console.WriteLine();
 
         if (job.Items.IsEmpty)
@@ -155,7 +158,7 @@ public static class RunCommand
         if (lines.Count > 10) Console.WriteLine($"    ... and {lines.Count - 10} more");
     }
 
-    private static bool Confirm()
+    private static bool Confirm(bool deletesOriginals)
     {
         if (Console.IsInputRedirected)
         {
@@ -163,7 +166,9 @@ public static class RunCommand
             return false;
         }
 
-        Console.Write("\nStart? [y/N] ");
+        Console.Write(deletesOriginals
+            ? "\nStart? Original files will be deleted once their archive is verified. [y/N] "
+            : "\nStart? [y/N] ");
         string? answer = Console.ReadLine();
         return answer?.Trim().ToLowerInvariant() is "y" or "yes";
     }
@@ -183,6 +188,8 @@ public static class RunCommand
             Console.WriteLine($"  {group.Key,-15} {group.Count()}");
         if (done.Count > 0)
             Console.WriteLine($"  Done items: {Format.Bytes(before)} -> {Format.Bytes(after)} ({(before > 0 ? 1 - (double)after / before : 0):P0} saved)");
+        if (job.Config.DeleteAfterVerify)
+            Console.WriteLine($"  Original files deleted: {items.Sum(i => i.Stats?.FilesDeleted ?? 0):N0}");
 
         var problems = items.Where(i => i.State is JobItemState.NeedsAttention or JobItemState.Failed).ToList();
         if (problems.Count == 0) return;
