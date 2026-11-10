@@ -249,8 +249,11 @@ Writing to `.7z.tmp` first means interrupted jobs leave no orphan corrupted .7z 
 * Working directory = the item's source folder (for a file item: its parent), so the archive stores paths relative to the item.
 * `@listfile` contains exactly the files collected at job-build time (symlinks and lock files already removed). That keeps the archive and the file-count check in agreement, and avoids command-line length limits.
 * `-bsp1` writes progress percentages to stdout. Parse them to update `BytesProcessed` (`percent × TotalBytes`).
-* Add `-sse` when `LockedFileBehavior == AbortSubJob`: 7-Zip then stops if it can't open an input file.
+* Add `-sse` when `LockedFileBehavior == AbortSubJob`: 7-Zip then stops (exit `2`, no archive) if it can't open an input file. Note: a file that no longer exists is only a scan warning (exit `1`), even with `-sse`.
 * Always pass `-t7z` explicitly, since the output name ends in `.tmp`.
+* The archive must not exist beforehand: `7z a` on an existing archive updates it instead of creating a new one. `SevenZipRunner` refuses to run in that case.
+* Do not put `--` before the arguments: it stops 7-Zip from treating `@listfile` as a list file. Pass absolute paths instead, so they can't be mistaken for switches.
+* stdin is closed and `-y` is passed, so 7-Zip can never block waiting for input (e.g. a password prompt).
 
 Exit codes: `0` OK · `1` warning (e.g. some files could not be opened) · `2` fatal error · `7` command-line error · `8` not enough memory · `255` stopped by user. Exit `1` marks the item `NeedsAttention` (the archive is kept as `.7z.tmp` for the user to review, never renamed). `2` and above are errors.
 
@@ -680,8 +683,10 @@ Compressor/
 └── third-party/7zip/
     ├── win-x64/7za.exe
     ├── linux-x64/7zz
+    ├── osx/7zz
     ├── License.txt
-    └── VERSION                         // version + SHA-256 per binary
+    ├── VERSION                         // 7-Zip version shipped
+    └── SHA256SUMS                      // sha256sum format, e.g. "<hex>  win-x64/7za.exe"; checked at startup
 ```
 
 SharpCompress is removed from `Core.csproj` once `CompressionHelpers` moves to 7-Zip.
