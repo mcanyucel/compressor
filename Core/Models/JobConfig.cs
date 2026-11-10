@@ -5,7 +5,13 @@ public sealed class JobConfig
     public required string RootPath { get; init; }
 
     public ParallelismLevel Parallelism { get; init; } = ParallelismLevel.Normal;
-    public CompressionStrategyKind Strategy { get; init; } = CompressionStrategyKind.Safe;
+    public CompressionStrategyKind Strategy { get; init; } = CompressionStrategyKind.Fast; // Safe needs file watching (v2)
+
+    /// <summary>
+    /// 7-Zip <c>-mx</c>: 0 (store) to 9 (ultra). Memory use grows with level and threads; keep old hardware at 5 or below.
+    /// </summary>
+    public int CompressionLevel { get; init; } = 5;
+
     public CollisionBehavior CollisionBehavior { get; init; } = CollisionBehavior.RenameNew;
     public LockedFileBehavior LockedFileBehavior { get; init; } = LockedFileBehavior.Skip;
     public SourceChangeBehavior SourceChangeBehavior { get; init; } = SourceChangeBehavior.CancelSubJob;
@@ -18,7 +24,18 @@ public sealed class JobConfig
     public List<JobRule> Rules { get; init; } = [];
 
     /// <summary>
-    /// Resolved from <see cref="Parallelism"/> at access time.
+    /// Items compressed at the same time. Splits the <see cref="DegreeOfParallelism"/> thread budget with
+    /// <see cref="ThreadsPerItem"/>; see "Parallelism" in the design doc. Defaults to be tuned with benchmarks.
+    /// </summary>
+    public int ConcurrentItems => Math.Max(1, DegreeOfParallelism / 2);
+
+    /// <summary>
+    /// Threads given to each 7-Zip process (<c>-mmt</c>).
+    /// </summary>
+    public int ThreadsPerItem => Math.Max(1, DegreeOfParallelism / ConcurrentItems);
+
+    /// <summary>
+    /// Total thread budget, resolved from <see cref="Parallelism"/> at access time.
     /// Always at least 1
     /// </summary>
     public int DegreeOfParallelism => Parallelism switch

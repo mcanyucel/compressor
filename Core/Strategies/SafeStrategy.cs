@@ -1,14 +1,16 @@
 ﻿using Core.Compression;
 using Core.Models;
+using Core.SevenZip;
 
 namespace Core.Strategies;
 
 /// <summary>
-/// Checks the cancellation token between every file, making it responsive to FSW events from the <c>JobExecutor</c>.
-/// Intended for live machines where source files may change during execution.
+/// Intended for live machines where source files may change during execution (v2).
+/// Compression is the same as <see cref="FastStrategy"/>; the difference will be the executor's FSW handler
+/// cancelling <see cref="JobItem.Cts"/>, which kills the item's 7-Zip process.
 /// </summary>
-public sealed class SafeStrategy : ICompressionStrategy
+public sealed class SafeStrategy(SevenZipRunner runner) : ICompressionStrategy
 {
-    public Task CompressItemAsync(JobItem item, JobConfig config, CancellationToken ct) => 
-        CompressionHelpers.CompressAsync(item, checkCancellationBetweenFiles: true, ct);
+    public Task<CompressionResult> CompressItemAsync(JobItem item, JobConfig config, CancellationToken ct) =>
+        CompressionHelpers.CompressAsync(item, config, runner, ct);
 }

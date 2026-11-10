@@ -143,7 +143,7 @@ public sealed class JobConfig
 {
     public string                  RootPath             { get; init; }
     public ParallelismLevel        Parallelism          { get; init; } = ParallelismLevel.Normal;
-    public int                     CompressionLevel     { get; init; } = 5;     // 7-Zip -mx (0-9); planned
+    public int                     CompressionLevel     { get; init; } = 5;     // 7-Zip -mx (0-9)
     public CompressionStrategyKind Strategy             { get; init; } = CompressionStrategyKind.Fast; // Safe is v2
     public CollisionBehavior       CollisionBehavior    { get; init; } = CollisionBehavior.RenameNew;
     public LockedFileBehavior      LockedFileBehavior   { get; init; } = LockedFileBehavior.Skip;
@@ -158,8 +158,6 @@ public sealed class JobRule
     public JobAction  Action       { get; init; }   // Compress | Skip
 }
 ```
-
-Note: the code currently defaults `Strategy` to `Safe`; switch it to `Fast` (or a single 7-Zip strategy) when the compression code moves to 7-Zip.
 
 Example job file:
 
@@ -689,7 +687,7 @@ Compressor/
     └── SHA256SUMS                      // sha256sum format, e.g. "<hex>  win-x64/7za.exe"; checked at startup
 ```
 
-SharpCompress is removed from `Core.csproj` once `CompressionHelpers` moves to 7-Zip.
+SharpCompress has been removed; all compression and verification goes through 7-Zip.
 
 ---
 

@@ -1,6 +1,5 @@
 ﻿using Core.Models;
-using SharpCompress.Common;
-using SharpCompress.Writers;
+using Core.SevenZip;
 
 namespace Core.Compression;
 
@@ -11,55 +10,94 @@ public static class CompressionHelpers
 {
     private static readonly string[] LockFilePatterns = ["~$*", "*.tmp", "*.lck", "*.lock"];
 
-    public static async Task CompressAsync(JobItem item, bool checkCancellationBetweenFiles, CancellationToken ct)
+    /// <summary>
+    /// Compresses <paramref name="item"/> with 7-Zip into <c>&lt;OutputPath&gt;.tmp</c>, then renames it to <see cref="JobItem.OutputPath"/>.
+    /// Does not change <see cref="JobItem.State"/>; the executor does that based on the returned outcome.
+    /// Throws <see cref="OperationCanceledException"/> on cancellation, after deleting the partial archive.
+    /// </summary>
+    public static async Task<CompressionResult> CompressAsync(
+        JobItem item, JobConfig config, SevenZipRunner runner, CancellationToken ct)
     {
-        var tmpPath = $"{item.OutputPath}.tmp";
+        string tmpPath = $"{item.OutputPath}.tmp";
 
+        // A leftover from an interrupted run. 7-Zip would append to it, and deleting it is the user's call.
+        if (File.Exists(tmpPath))
+            return new CompressionResult(CompressionOutcome.Failed, $"A temporary archive from an earlier run already exists: {tmpPath}");
+
+        string sourceRoot = item.ItemKind == ItemKind.Directory
+            ? item.SourcePath
+            : Path.GetDirectoryName(item.SourcePath)
+              ?? throw new InvalidOperationException($"File item has no parent directory: {item.SourcePath}");
+
+        IReadOnlyList<string> files = await Task.Run(() => CollectFiles(item), ct);
+        if (files.Count == 0)
+            return new CompressionResult(CompressionOutcome.NothingToCompress);
+
+        long totalBytes = item.TotalBytes > 0 ? item.TotalBytes : files.Sum(f => new FileInfo(f).Length);
+
+        var request = new SevenZipAddRequest
+        {
+            ArchivePath = tmpPath,
+            WorkingDirectory = sourceRoot,
+            Files = files.Select(f => Path.GetRelativePath(sourceRoot, f)).ToList(),
+            CompressionLevel = config.CompressionLevel,
+            Threads = config.ThreadsPerItem,
+            StopOnUnreadableFile = config.LockedFileBehavior == LockedFileBehavior.AbortSubJob
+        };
+
+        // 7-Zip reports a percentage only; translate it to bytes for the UI.
+        var progress = new InlineProgress(percent =>
+            Interlocked.Exchange(ref item.BytesProcessed, totalBytes * percent / 100));
+
+        SevenZipResult result;
         try
         {
-            IReadOnlyList<string> files = await Task.Run(() => CollectFiles(item), ct);
-
-            await Task.Run(() =>
-            {
-                using var outStream = new FileStream(
-                    tmpPath, FileMode.Create, FileAccess.Write, FileShare.None,
-                    bufferSize: 65536, useAsync: false);
-
-                using IWriter writer = WriterFactory.OpenWriter(
-                    outStream,
-                    ArchiveType.SevenZip,
-                    new WriterOptions(CompressionType.LZMA) { LeaveStreamOpen = false });
-
-                string? sourceRoot = item.ItemKind == ItemKind.Directory
-                    ? item.SourcePath
-                    : Path.GetDirectoryName(item.SourcePath);
-
-                if (sourceRoot is null)
-                    throw new InvalidOperationException("Source root cannot be null!");
-
-                foreach (string filePath in files)
-                {
-                    if (checkCancellationBetweenFiles)
-                        ct.ThrowIfCancellationRequested();
-
-                    string relativePath = Path.GetRelativePath(sourceRoot, filePath);
-                    using (var fileStream = File.OpenRead(filePath))
-                        writer.Write(relativePath, fileStream, File.GetLastWriteTime(filePath));
-
-                    Interlocked.Add(ref item.BytesProcessed, new FileInfo(filePath).Length);
-                    Interlocked.Increment(ref item.FilesProcessed);
-                }
-            }, ct);
+            result = await runner.AddAsync(request, progress, ct);
         }
         catch
         {
-            CleanupTmp(item);
+            CleanupTmp(item); // cancellation or failure to start 7-Zip
             throw;
         }
-        
-        // Atomic rename .7z.tmp to .7z
-        // output path should already collision-resolved at job-build time
-        File.Move(tmpPath, item.OutputPath, overwrite: false);
+
+        switch (result.Status)
+        {
+            case SevenZipExitCode.Success:
+                break;
+
+            case SevenZipExitCode.Warning:
+                return new CompressionResult(CompressionOutcome.CompletedWithWarnings,
+                    $"{result.ErrorOutput}\nThe archive was kept as {tmpPath} for review.");
+
+            default:
+                CleanupTmp(item);
+                return new CompressionResult(CompressionOutcome.Failed,
+                    $"7-Zip failed ({result.Status}, exit code {result.ExitCode}): {result.ErrorOutput}");
+        }
+
+        try
+        {
+            // Output path is collision-resolved at job-build time, but something may have appeared there since.
+            File.Move(tmpPath, item.OutputPath, overwrite: false);
+        }
+        catch (IOException ex)
+        {
+            return new CompressionResult(CompressionOutcome.Failed,
+                $"Could not rename {tmpPath} to {item.OutputPath}: {ex.Message}. The archive was kept as {tmpPath}.");
+        }
+
+        Interlocked.Exchange(ref item.BytesProcessed, totalBytes);
+        Interlocked.Exchange(ref item.FilesProcessed, files.Count);
+        return new CompressionResult(CompressionOutcome.Completed);
+    }
+
+    /// <summary>
+    /// Calls the handler on the reporting thread. Unlike <see cref="Progress{T}"/>, it doesn't post to a
+    /// synchronization context, which is right for updating the thread-safe <see cref="JobItem"/> counters.
+    /// </summary>
+    private sealed class InlineProgress(Action<int> handler) : IProgress<int>
+    {
+        public void Report(int value) => handler(value);
     }
 
     public static IReadOnlyList<string> CollectFiles(JobItem item)
