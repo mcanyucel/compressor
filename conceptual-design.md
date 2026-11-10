@@ -149,7 +149,7 @@ public sealed class BackupJob
 
 `JobConfig`
 
-Serialized as JSON. The job file is the unit of persistence
+Serialized as JSON by `JobFile` (camelCase, enums as strings, comments and trailing commas allowed so it can be edited by hand). The job file is the unit of persistence. `rootPath` must be absolute; rule paths may use `\` or `/`.
 
 ```csharp
 public sealed class JobConfig
@@ -327,6 +327,17 @@ public async Task<PreflightReport> RunPreflightAsync(CancellationToken ct)
   // 7. Check free space on the output drive against an estimate of the archive sizes
 }
 ```
+
+### Implementation
+
+Split between two steps that fill the same `PreflightReport`:
+
+* `JobBuilder` (build time): invalid rules, collisions, leftover `.7z.tmp` files, skipped links, unreadable folders, empty items, and the per-item size pre-scan.
+* `PreflightRunner` (touches every file): locked files, compressibility per item, and free space per output drive.
+  * Locked files are found by opening each file with `FileShare.Read`, the way 7-Zip opens it, so the result matches what compression will hit.
+  * Free space is compared with the estimated archive sizes (see below), not the source sizes.
+
+Locating 7-Zip is done by the front end before building the job, since a missing 7-Zip blocks everything.
 
 ### Pre-Flight Summary UI
 
@@ -591,6 +602,10 @@ Triggered automatically when the user expands a tree node. Enumerates direct fil
 * Leaf: run extension heuristics -> assign Good/Average/Poor
 * Has subfolders: assign unknown, show deep scan button
 
+#### Weighting by Bytes
+
+The implementation (`CompressibilityTally`) weights by **bytes**, not file count as in the sketch below: one 4 GB video next to 200 small text files is a poor candidate even though most of its files compress well. The same tally gives a rough archive size (known-compressible ×0.3, unknown ×0.7, incompressible ×1.0), used for the disk-space check and the savings preview.
+
 #### Deep Scan (On Button Click)
 
 Recursive enumeration of all files under the node. Assigns aggregate hint to that specific node. The button disappears and is replaced by the result label.
@@ -625,6 +640,8 @@ public async Task<CompressibilityHint> DeepScanAsync(string path, CancellationTo
 ```
 
 **Extension Reference Lists**
+
+The current lists live in `Core/Analysis/ExtensionLists.cs`. Changes from the sketch below: more audio/video/archive types; old binary Office formats (`.doc`, `.xls`, `.ppt`), `.pst`, `.mdb`, `.bmp`, `.tif`, `.wav` added as compressible (common on old PCs); `.docx`/`.xlsx`/`.pptx` moved out of the compressible list, since they are zip files internally and gain little.
 
 ```csharp
 private static readonly HashSet<string> KnownIncompressible =
@@ -693,12 +710,15 @@ Compressor/
 │   ├── Execution/
 │   │   └── JobExecutor.cs              // Parallel.ForEachAsync loop
 │   ├── Analysis/
-│   │   ├── CompressibilityAnalyzer.cs  // shallow + deep scan
-│   │   └── ExtensionLists.cs
+│   │   ├── CompressibilityTally.cs     // hint + size estimate, weighted by bytes
+│   │   ├── ExtensionLists.cs
+│   │   └── (tree shallow/deep scan: with the UI)
 │   └── Preflight/
 │       ├── PreflightRunner.cs
 │       └── PreflightReport.cs
-├── Cli/                                // console front end: scan / run / verify
+├── Cli/                                // console front end (assembly: compressor)
+│   ├── ScanCommand.cs                  // scan <folder> [--depth N] [--write job.json]
+│   └── RunCommand.cs                   // plan <job.json> / run <job.json> [--yes]
 ├── Ui/                                 // Avalonia app
 │   ├── ViewModels/
 │   │   ├── MainWindowViewModel.cs

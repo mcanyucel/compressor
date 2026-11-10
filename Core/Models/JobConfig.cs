@@ -1,4 +1,6 @@
-﻿namespace Core.Models;
+﻿using System.Text.Json.Serialization;
+
+namespace Core.Models;
 
 public sealed class JobConfig
 {
@@ -31,17 +33,20 @@ public sealed class JobConfig
     /// Items compressed at the same time. Splits the <see cref="DegreeOfParallelism"/> thread budget with
     /// <see cref="ThreadsPerItem"/>; see "Parallelism" in the design doc. Defaults to be tuned with benchmarks.
     /// </summary>
+    [JsonIgnore]
     public int ConcurrentItems => Math.Max(1, DegreeOfParallelism / 2);
 
     /// <summary>
     /// Threads given to each 7-Zip process (<c>-mmt</c>).
     /// </summary>
+    [JsonIgnore]
     public int ThreadsPerItem => Math.Max(1, DegreeOfParallelism / ConcurrentItems);
 
     /// <summary>
     /// Total thread budget, resolved from <see cref="Parallelism"/> at access time.
     /// Always at least 1
     /// </summary>
+    [JsonIgnore]
     public int DegreeOfParallelism => Parallelism switch
     {
         ParallelismLevel.Minimum => Math.Max(1, (int)(Environment.ProcessorCount * 0.10)),

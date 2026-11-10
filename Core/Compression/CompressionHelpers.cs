@@ -127,43 +127,6 @@ public static class CompressionHelpers
 
         return SourceEnumerator.IsLink(file) ? [] : [file];
     }
-    /// <summary>
-    /// Attempts to open each file with a read handle to detect locks.
-    /// Returns paths of files that cannot be opened (i.e. read).
-    /// </summary>
-    /// <param name="files"></param>
-    /// <param name="ct"></param>
-    /// <returns></returns>
-    public static async Task<IReadOnlyList<string>> FindLockedFilesAsync(
-        IReadOnlyList<string> files,
-        CancellationToken ct)
-    {
-        return await Task.Run(IReadOnlyList<string> () =>
-        {
-            var locked = new List<string>();
-
-            foreach (string file in files)
-            {
-                ct.ThrowIfCancellationRequested();
-
-                try
-                {
-                    using var fs = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
-                }
-                catch (IOException)
-                {
-                    locked.Add(file);
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    locked.Add(file);
-                }
-            }
-
-            return locked;
-        }, ct);
-    }
-
     public static void CleanupTmp(JobItem item)
     {
         var tmp = $"{item.OutputPath}.tmp";
