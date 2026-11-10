@@ -114,7 +114,7 @@ public enum JobState
     ReadyForPreflight,
     RunningPreflight,
     ReadyToExecute,
-    Execute,
+    Executing,
     Completed,
     CompletedWithErrors,
     Cancelled

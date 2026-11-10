@@ -4,24 +4,50 @@
 
 Most backup tools treat the archives as the primary artifact. This tool treats the **folder tree** as the primary artifact: compression is a property applied to individual nodes, not a transformation of the whole tree.
 
+Motivation: compressing an old directory into a single archive makes its contents invisible to file-name indexers such as Everything and Windows Search. Compressing selected nodes instead keeps the folder structure (and every uncompressed name) indexable, while the bulky, compressible parts shrink.
+
 Goals:
 * Preserve navigability: The output is still a browsable directory structure (unless the topmost node is marked to compress)
 * Avoid re-compressing already-incompressible content (images, videos, existing archives)
 * Allow per-folder and per-file compression decisions
 * Run silently after a pre-flight gate - no prompts mid-job
 * Target old hardware gracefully: Controllable parallelism, low overhead.
+* Free and open-source; Windows is the primary target, but the app should also run on Linux and macOS.
 
 --- 
+
+## Decisions (November 2026)
+
+| Decision | Reason |
+| -- | -- |
+| **UI: Avalonia instead of WPF** | FOSS project: contributors on Linux/macOS can build and run the UI. Same XAML + MVVM model as WPF, and CommunityToolkit.Mvvm works unchanged. |
+| **Compression engine: bundled 7-Zip command line instead of SharpCompress** | Native, multithreaded LZMA2 is much faster than a managed implementation and is battle-tested. 7-Zip also handles verification (`t` and `l` commands). See [Bundling 7-Zip](#bundling-7-zip). |
+| **File watching and the Safe strategy deferred to v2** | Folders being archived are normally idle. v1 treats sources as static and relies on pre-flight checks plus post-compression verification. The FSW design is kept below, marked v2. |
+| **Console front end alongside the GUI** | Lets the engine be tested end-to-end before the UI exists, runs on CI, and gives power users something to script. |
+
+---
 
 ## Tech Stack
 
 | Concern | Choice |
 | --      | --     |
-|Language, runtime | C#, dotnet 10 |
-| UI Framework | WPF, CommunityToolkit.MVVM | 
-| Compression | SharpCompress |
-| Serialization | Json | 
-| FileSystem Events | FileSystemWatcher |
+| Language, runtime | C#, .NET 10 |
+| UI Framework | Avalonia, CommunityToolkit.Mvvm |
+| Compression | 7-Zip command line (`7za.exe` on Windows, `7zz` on Linux/macOS), run as a subprocess |
+| Serialization | System.Text.Json |
+| FileSystem Events | FileSystemWatcher (v2) |
+
+---
+
+## Bundling 7-Zip
+
+7-Zip is mostly LGPL 2.1+, with some BSD 3-clause parts. Running the unmodified binary as a separate process places no license requirement on the app's own code.
+
+* Ship the standalone console build from the **7-Zip Extra** package (`7za.exe`) on Windows, and the official `7zz` builds on Linux/macOS. `7za` does not contain the unRAR code, so the unRAR license restriction does not apply. It supports every format this tool needs (7z, zip, tar, gzip, xz).
+* Include 7-Zip's `License.txt`, name the bundled version, and link to the matching source download on 7-zip.org.
+* Pin one version. Store its SHA-256 next to the binary and check it at startup; refuse to run a binary that doesn't match.
+* Lookup order (`SevenZipLocator`): path set in app settings → bundled binary (hash-checked). An installed 7-Zip (Windows registry `HKLM\SOFTWARE\7-Zip`, value `Path`) may be offered as an option, but the bundled copy is the default so behavior is predictable across machines.
+* Do not modify 7-Zip. If that ever becomes necessary, the modified source must be published under the LGPL.
 
 ## Core Concept: Effective Compression Units
 
@@ -61,19 +87,21 @@ public sealed class JobItem
   // Identity - set once at job-build time, never mutated
   public string SourcePath { get; init; }
   public string OutputPath { get; init; } // final .7z path
-  public ItemKind Kind { get; init; }
+  public ItemKind ItemKind { get; init; }
   public long TotalBytes { get; init; } // prescanned at job-build time
+  public int TotalFileCount { get; init; } // prescanned at job-build time, used by verification
 
   // Runtime state - background-thread-safe
   public volatile JobItemState State;
-  public long BytesProcessed // should be mutated via Interlocked.Add
+  public long BytesProcessed; // mutated via Interlocked; estimated from 7-Zip's percentage output
+  public int FilesProcessed;  // mutated via Interlocked
 
   // Control
   public CancellationTokenSource Cts { get; } = new();
 
   // Post-run metadata - written once after completion
   public JobItemError? Error { get; set; }
-  oybkuc JobItemStats? Stats { get; set; }
+  public JobItemStats? Stats { get; set; }
 }
 ```
 
@@ -85,15 +113,14 @@ Wraps the item dictionary and overall lifecycle. Sealed after job-build so no st
 public sealed class BackupJob
 {
   public JobConfig Config { get; init; }
-  public ICompressionStrategy Strategy { get; init; }
 
   // Keyed by normalized absolute path - OrdinalIgnoreCase for Windows
-  public ConcurrentDictionary<string JobItem> Items { get; } = new(StringComparer.OrdinalIgnoreCase);
+  public ConcurrentDictionary<string, JobItem> Items { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-  // Sorted descending by length (deepest first) for O(log n) FSW prefix match
+  // Sorted descending by length (deepest first) for FSW prefix match (v2)
   public IReadOnlyList<string> SortedPaths { get; private set; }
 
-  public JobState OverallState OverallState { get; private set; }
+  public JobState OverallState { get; private set; }
   public DateTimeOffset? StartedAt { get; private set; }
   public DateTimeOffset? FinishedAt { get; private set; }
 
@@ -114,22 +141,25 @@ Serialized as JSON. The job file is the unit of persistence
 ```csharp
 public sealed class JobConfig
 {
-    public string              RootPath          { get; init; }
-    public ParallelismLevel    Parallelism        { get; init; } = ParallelismLevel.Normal;
-    public CompressionStrategy Strategy           { get; init; } = CompressionStrategy.Safe;
-    public CollisionBehavior   OnCollision        { get; init; } = CollisionBehavior.RenameNew;
-    public LockedFileBehavior  OnLockedFile       { get; init; } = LockedFileBehavior.Skip;
-    public SourceChangeBehavior OnSourceChange    { get; init; } = SourceChangeBehavior.CancelSubJob;
-    public bool                DeleteAfterVerify  { get; init; } = false;
-    public List<JobRule>       Rules              { get; init; } = [];
+    public string                  RootPath             { get; init; }
+    public ParallelismLevel        Parallelism          { get; init; } = ParallelismLevel.Normal;
+    public int                     CompressionLevel     { get; init; } = 5;     // 7-Zip -mx (0-9); planned
+    public CompressionStrategyKind Strategy             { get; init; } = CompressionStrategyKind.Fast; // Safe is v2
+    public CollisionBehavior       CollisionBehavior    { get; init; } = CollisionBehavior.RenameNew;
+    public LockedFileBehavior      LockedFileBehavior   { get; init; } = LockedFileBehavior.Skip;
+    public SourceChangeBehavior    SourceChangeBehavior { get; init; } = SourceChangeBehavior.CancelSubJob; // v2
+    public bool                    DeleteAfterVerify    { get; init; } = false;
+    public List<JobRule>           Rules                { get; init; } = [];
 }
 
 public sealed class JobRule
 {
-    public string     Path   { get; init; }   // relative to RootPath
-    public JobAction  Action { get; init; }   // Compress | Skip
+    public string     RelativePath { get; init; }   // relative to RootPath
+    public JobAction  Action       { get; init; }   // Compress | Skip
 }
 ```
+
+Note: the code currently defaults `Strategy` to `Safe`; switch it to `Fast` (or a single 7-Zip strategy) when the compression code moves to 7-Zip.
 
 Example job file:
 
@@ -137,15 +167,14 @@ Example job file:
 {
   "rootPath": "C:\\OldPC\\Users\\mustafa",
   "parallelism": "Normal",
-  "strategy": "Safe",
-  "onCollision": "RenameNew",
-  "onLockedFile": "Skip",
-  "onSourceChange": "CancelSubJob",
+  "compressionLevel": 5,
+  "collisionBehavior": "RenameNew",
+  "lockedFileBehavior": "Skip",
   "deleteAfterVerify": false,
   "rules": [
-    { "path": "Documents\\contracts", "action": "Compress" },
-    { "path": "Documents\\photos",    "action": "Skip" },
-    { "path": "Documents\\notes.txt", "action": "Compress" }
+    { "relativePath": "Documents\\contracts", "action": "Compress" },
+    { "relativePath": "Documents\\photos",    "action": "Skip" },
+    { "relativePath": "Documents\\notes.txt", "action": "Compress" }
   ]
 }
 ```
@@ -166,6 +195,13 @@ public enum ParallelismLevel
 }
 ```
 
+With 7-Zip, the level defines a **thread budget** `B` rather than a number of items. Two knobs share that budget:
+
+* Items compressed concurrently: `C = max(1, B / 2)`
+* Threads per 7-Zip process: `-mmt=max(1, B / C)` (normally 2)
+
+Rationale: LZMA2 splits large inputs into blocks, so one big folder benefits from extra threads, while many small items benefit from concurrency. These defaults should be revisited with benchmarks. Memory use grows with both threads and compression level, so old hardware should stay at `-mx=5` or below.
+
 ---
 
 ## Strategy Pattern
@@ -179,48 +215,63 @@ public interface ICompressionStrategy
 }
 ```
 
-`FastStrategy`
+**v1** ships a single strategy that runs 7-Zip (`SevenZipStrategy`, replacing the current `FastStrategy`). It does not consume FSW events, but it still honours the per-item and global cancellation tokens.
 
-No FSW consumption, no reactive handling. For offline or disconnected drives / PCs where nothing is actively touching the files during execution.
+**v2** adds `SafeStrategy`: the same 7-Zip invocation, plus FSW-driven cancellation for live machines. See the FSW section below.
 
-`SafeStrategy`
-
-Consumes FSW events, per-item `CancellationTokenSource`. For live machines. See FSW section below.
-
-Shared implementation lives in static helper classes consumed by both strategies - ShartCompress write loop, `.7z.tmp` rename, post-compression verification.
+Shared implementation lives in static helpers used by all strategies: building the file list, running 7-Zip, the `.7z.tmp` rename, and post-compression verification.
 
 ---
 
 ## Compression Pipeline (Per Item)
 
 ```
-Write to .7z.tmp
+Write file list (UTF-8) for the item
+      ↓
+7za a → .7z.tmp
       ↓
 Rename .7z.tmp → .7z
       ↓
-Verify: SharpCompress re-reads and checks CRC
-Verify: file count in archive == file count enumerated at job-build time
+Verify: 7za t   (re-reads the archive and checks every CRC)
+Verify: 7za l   (file count in archive == file count enumerated at job-build time)
       ↓
 [Optional] Delete originals
 ```
 
-Writing to `.7z.tmp` first means interrupted jobs leave no orphan corrupted .7z files. On next launch, stale `.7z.temp` files are detected and either cleaned up or flagged.
+Writing to `.7z.tmp` first means interrupted jobs leave no orphan corrupted .7z files. On next launch, stale `.7z.tmp` files are detected and either cleaned up or flagged.
 
-### Cancellation Hook
+### 7-Zip Invocation
 
-```csharp
-foreach (var file in filesToCompress)
-{
-    ct.ThrowIfCancellationRequested();
-    writer.Write(relativePath, file.FullPath, file.LastModified);
-}
+```
+7za a -t7z -mx=<level> -mmt=<threads> -bsp1 -bso0 -scsUTF-8 "<output>.7z.tmp" @"<listfile>"
 ```
 
-`ThrowIfCancellationRequested` between each file is the foundation of clean cancellation, and the `catch` block deletes any `.7z.tmp`. 
+* Working directory = the item's source folder (for a file item: its parent), so the archive stores paths relative to the item.
+* `@listfile` contains exactly the files collected at job-build time (symlinks and lock files already removed). That keeps the archive and the file-count check in agreement, and avoids command-line length limits.
+* `-bsp1` writes progress percentages to stdout. Parse them to update `BytesProcessed` (`percent × TotalBytes`).
+* Add `-sse` when `LockedFileBehavior == AbortSubJob`: 7-Zip then stops if it can't open an input file.
+* Always pass `-t7z` explicitly, since the output name ends in `.tmp`.
+
+Exit codes: `0` OK · `1` warning (e.g. some files could not be opened) · `2` fatal error · `7` command-line error · `8` not enough memory · `255` stopped by user. Exit `1` marks the item `NeedsAttention` (the archive is kept as `.7z.tmp` for the user to review, never renamed). `2` and above are errors.
+
+### Cancellation
+
+The unit of cancellation is the 7-Zip process. When the item's linked token fires:
+
+```csharp
+using var reg = ct.Register(() => process.Kill(entireProcessTree: true));
+await process.WaitForExitAsync(CancellationToken.None);
+ct.ThrowIfCancellationRequested(); // caller deletes the .7z.tmp
+```
 
 ## Locked File Handling
 
-SharpCompress exceptions from locked files are caught per-file. The item is marked `NeedsAttention` rather than silently producing an incomplete archive. The post-compression file-count verification provides a second safety net.
+Pre-flight already reports files that can't be opened. During compression, 7-Zip reports files it couldn't open as warnings (exit code `1`):
+
+* `LockedFileBehavior.Skip`: the archive is completed without the file but left as `.7z.tmp`, the item is marked `NeedsAttention`, and the warning text from stderr is stored in `JobItem.Error`. The file-count check would also catch the missing file.
+* `LockedFileBehavior.AbortSubJob`: run with `-sse`; the item fails and its `.7z.tmp` is deleted.
+
+Either way, an item with a locked file never reaches `Done`, and its originals are never deleted.
 
 ## Name Collisions
 
@@ -244,6 +295,8 @@ public async Task<PreflightReport> RunPreflightAsync(CancellationToken ct)
   // 3. Detect name collisions
   // 4. Pre-scan total bytes per item for accurate progress tracking
   // 5. Detect and filter patterns: ~*.docx, symlinks, empty directory chains, etc
+  // 6. Locate 7-Zip and check its hash
+  // 7. Check free space on the output drive against an estimate of the archive sizes
 }
 ```
 
@@ -258,7 +311,7 @@ Analyzing job...
 
   On collision:      [Rename new ▾]
   On locked file:    [Skip ▾]
-  On source change:  [Cancel sub-job ▾]
+  Compression level: [Normal (5) ▾]
   Delete originals after verification: [ ]
 
   [Start Job]   [Save Job File]
@@ -266,7 +319,9 @@ Analyzing job...
 
 ---
 
-## FileSystemWatcher
+## FileSystemWatcher (v2)
+
+> **Deferred to v2.** v1 does not watch the file system. The folders being archived are expected to be idle; pre-flight checks and post-compression verification (CRC and file count) catch most problems. The design below is kept for v2.
 
 One watcher instance on the topmost root folder, `IncludeSubdirectories = true`. Two consumers:
 
@@ -298,11 +353,13 @@ JobItem? FindOwningJob(string changedPath)
 ```
 
 
-Deepest-first odering ensures the most specific match wins.
+Deepest-first ordering ensures the most specific match wins.
+
+A plain `StartsWith` is not enough: `C:\docs\a` would also match `C:\docs\abc\file.txt`. A match must end at a path separator (or be the whole path). `BackupJob.FindOwningItem` implements this check.
 
 ### FSW Job Handler
 
-```charp
+```csharp
 void OnFswJobEvent(string changedPath)
 {
     var owningJob = FindOwningJob(changedPath);
@@ -316,7 +373,7 @@ void OnFswJobEvent(string changedPath)
             break;
 
         case JobItemState.InProgress:
-            owningJob.Cts.Cancel();           // SharpCompress loop cancels on next file
+            owningJob.Cts.Cancel();           // kills the item's 7-Zip process
             owningJob.State = JobItemState.NeedsAttention;
             NotifyUI(owningJob, "Source changed during compression");
             break;
@@ -371,7 +428,9 @@ Skipped silently at job-build time. Logged in preflight report.
 
 ### Empty Directory Chains
 
-`root/sub1/sub2/sub3` where all are empty. SharpCompress does not include empty directories by default, so these are left in place - no archive produced, no deletion. Log in preflight. 
+`root/sub1/sub2/sub3` where all are empty. The list file passed to 7-Zip contains only files, so empty directories are not stored. An item with no files is left in place - no archive produced, no deletion. Log in preflight.
+
+Open point: an empty subfolder *inside* a unit that does contain files is not stored either, so delete-after-verify would lose it. Either add directory entries to the list file (without letting 7-Zip recurse into them), or keep empty subfolders when deleting originals.
 
 ### Lock Files
 
@@ -381,13 +440,21 @@ Filter patterns like `*.tmp`, `~$*.docx`, `*.lck` at job-build time before pre-f
 
 On launch, scan for `.7z.tmp` files under the root. Present them in a 'stale jobs' panel, and leave any action to user.
 
-### File Added to In-Progress Folder
+### File Added to In-Progress Folder (v2)
 
 If `root/sub1` is being compressed (sub1 is the effective unit) and a file is added to `root/sub1/sub2/sub3` during compression, FSW fires and the entire sub1 job is canceled. If sub3 had been the effective unit and sub1/sub2 were not marked, only sub3 is canceled. The owning-job resolution handles this naturally.
 
 ---
 
 ## UI / ViewModel Architecture
+
+The UI is built with **Avalonia** and CommunityToolkit.Mvvm. The layering below is framework-agnostic. Avalonia-specific notes:
+
+* Views are `.axaml` files. Use compiled bindings (`x:DataType`) so binding errors show up at build time.
+* `Avalonia.Threading.DispatcherTimer` replaces the WPF one; the API is the same.
+* `Progress<T>` works unchanged: Avalonia installs a `SynchronizationContext` on the UI thread.
+* The folder tree is a `TreeView` whose children are loaded lazily on expand (each unexpanded node holds a placeholder child so the expander shows). Large trees must never be loaded up front.
+* The job list uses a virtualizing `ListBox`, or `DataGrid` from the `Avalonia.Controls.DataGrid` package.
 
 ### Layer Separation
 
@@ -397,7 +464,7 @@ If `root/sub1` is being compressed (sub1 is the effective unit) and a file is ad
 
 `JobItemViewModel`
 
-Once instance per `JobItem`. The UI binds a `ListView` or `DataGrid` to the collection, with a `DataTemplate` per row:
+One instance per `JobItem`. The UI binds a `ListBox` or `DataGrid` to the collection, with a `DataTemplate` per row:
 
 ```csharp
 public sealed partial class JobItemViewModel : ObservableObject
@@ -497,7 +564,7 @@ Triggered automatically when the user expands a tree node. Enumerates direct fil
 
 #### Deep Scan (On Button Click)
 
-Recursive enumeration of all files under the node. Assings aggregate hint to that specific node. The button disappears and is replaced by the result label.
+Recursive enumeration of all files under the node. Assigns aggregate hint to that specific node. The button disappears and is replaced by the result label.
 
 ```csharp
 public async Task<CompressibilityHint> DeepScanAsync(string path, CancellationToken ct)
@@ -548,11 +615,11 @@ private static readonly HashSet<string> KnownCompressible =
 ];
 ```
 
-** Hint Cache**
+**Hint Cache**
 
 Shallow scans are usually cheap enough to not bother caching. Deep scan results are cached in a dictionary, keyed by absolute path.
 
-FSW hint consumer invalidates by prefix match - a change anywhere inside a subtree invalidates that node's cached deep scan result, resetting the tree to unknown.
+In v1, a cached result is cleared by a **Refresh** action on the node and after a job finishes. In v2, the FSW hint consumer invalidates by prefix match - a change anywhere inside a subtree invalidates that node's cached deep scan result, resetting the tree to unknown.
 
 ```csharp
 void OnFswHintEvent(string changedPath)
@@ -570,36 +637,55 @@ void OnFswHintEvent(string changedPath)
 
 ## Suggested Project Structure
 
-CompressorTool/
-├── Core/
+```
+Compressor/
+├── Compressor.slnx
+├── Core/                               // class library, no UI references
 │   ├── Models/
 │   │   ├── JobItem.cs
 │   │   ├── BackupJob.cs
 │   │   ├── JobConfig.cs
 │   │   └── JobRule.cs
+│   ├── Planning/
+│   │   ├── JobBuilder.cs               // rules → effective units → JobItems
+│   │   └── JobFile.cs                  // JSON load / save
 │   ├── Strategies/
 │   │   ├── ICompressionStrategy.cs
-│   │   ├── FastStrategy.cs
-│   │   └── SafeStrategy.cs
+│   │   ├── SevenZipStrategy.cs         // v1
+│   │   └── SafeStrategy.cs             // v2 (FSW)
+│   ├── SevenZip/
+│   │   ├── SevenZipLocator.cs          // find bundled/configured binary, check hash
+│   │   └── SevenZipRunner.cs           // process wrapper: args, progress parsing, exit codes, kill on cancel
 │   ├── Compression/
-│   │   ├── CompressionHelpers.cs       // shared SharpCompress logic
-│   │   └── VerificationHelpers.cs
+│   │   ├── CompressionHelpers.cs       // file collection, collisions, .7z.tmp handling
+│   │   └── VerificationHelpers.cs      // 7za t + file count via 7za l
+│   ├── Execution/
+│   │   └── JobExecutor.cs              // Parallel.ForEachAsync loop
 │   ├── Analysis/
 │   │   ├── CompressibilityAnalyzer.cs  // shallow + deep scan
 │   │   └── ExtensionLists.cs
 │   └── Preflight/
 │       ├── PreflightRunner.cs
 │       └── PreflightReport.cs
-├── UI/
+├── Cli/                                // console front end: scan / run / verify
+├── Ui/                                 // Avalonia app
 │   ├── ViewModels/
 │   │   ├── MainWindowViewModel.cs
 │   │   ├── JobItemViewModel.cs
 │   │   └── TreeNodeViewModel.cs
 │   └── Views/
-│       ├── MainWindow.xaml
-│       └── MainWindow.xaml.cs
-└── CompressorTool.csproj
+│       ├── MainWindow.axaml
+│       └── MainWindow.axaml.cs
+├── Tests/
+└── third-party/7zip/
+    ├── win-x64/7za.exe
+    ├── linux-x64/7zz
+    ├── License.txt
+    └── VERSION                         // version + SHA-256 per binary
 ```
+
+SharpCompress is removed from `Core.csproj` once `CompressionHelpers` moves to 7-Zip.
+
 ---
 
 ## Open/Deferred Questions
@@ -607,5 +693,7 @@ CompressorTool/
 * Inflate/Extract: The output is already a browsable directory tree, any 7z-compatible tool can open individual archives.
 * VSS (Volume Shadow Copy): Not in v1. The correct solution for backing up fully live systems, but out of scope for the targeted use case of relatively older PC backup.
 * Sidecar manifest: A small json files next to each archive with metadata.
-* Swap WPF with Avalon UI.
-*
+* App license: pick one (MIT, GPL-3.0, ...). Bundling the unmodified 7-Zip binary is compatible with either.
+* Empty subfolders inside a unit (see Edge Cases).
+* Benchmark the thread-budget defaults (see Parallelism) on old hardware.
+* NTFS compression (`compact /exe:lzx`) as an alternative mode for nodes that should stay fully browsable on NTFS drives.
