@@ -2,4 +2,5 @@
   <Project Path="Cli/Cli.csproj" />
   <Project Path="Core/Core.csproj" />
   <Project Path="Tests/Tests.csproj" />
+  <Project Path="Ui/Ui.csproj" />
 </Solution>

@@ -1,0 +1,285 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Ui.ViewModels"
+        xmlns:ui="using:Ui"
+        x:Class="Ui.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Compressor"
+        Width="1150" Height="760" MinWidth="820" MinHeight="520">
+
+  <Window.Resources>
+    <ui:HintBrushConverter x:Key="HintBrush" />
+    <ui:StateBrushConverter x:Key="StateBrush" />
+  </Window.Resources>
+
+  <Window.Styles>
+    <Style Selector="TextBlock.unit">
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.covered">
+      <Setter Property="Opacity" Value="0.7" />
+    </Style>
+    <Style Selector="TextBlock.excluded">
+      <Setter Property="Opacity" Value="0.55" />
+      <Setter Property="TextDecorations" Value="Strikethrough" />
+    </Style>
+    <Style Selector="TextBlock.muted">
+      <Setter Property="Opacity" Value="0.65" />
+    </Style>
+    <Style Selector="TextBlock.heading">
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="FontSize" Value="15" />
+    </Style>
+    <Style Selector="Border.badge">
+      <Setter Property="CornerRadius" Value="4" />
+      <Setter Property="Padding" Value="6,1" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.badge > TextBlock">
+      <Setter Property="Foreground" Value="White" />
+      <Setter Property="FontSize" Value="11" />
+    </Style>
+    <Style Selector="Border.banner">
+      <Setter Property="Padding" Value="12,8" />
+    </Style>
+  </Window.Styles>
+
+  <DockPanel>
+
+    <!-- ── Toolbar ─────────────────────────────────────────────────────────── -->
+    <Border DockPanel.Dock="Top" Padding="10,8" BorderThickness="0,0,0,1"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="8">
+          <Button Content="Open folder…" Click="OnOpenFolder" IsEnabled="{Binding !IsRunning}" />
+          <Button Content="Load job…" Click="OnLoadJob" IsEnabled="{Binding !IsRunning}" />
+          <Button Content="Save job…" Click="OnSaveJob" IsEnabled="{Binding HasRoot}" />
+        </StackPanel>
+        <TextBlock DockPanel.Dock="Right" Text="{Binding SevenZipStatus}" Classes="muted" VerticalAlignment="Center" />
+        <TextBlock Text="{Binding RootPath}" VerticalAlignment="Center" Margin="16,0"
+                   TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+      </DockPanel>
+    </Border>
+
+    <!-- ── Banners ─────────────────────────────────────────────────────────── -->
+    <Border DockPanel.Dock="Top" Classes="banner" Background="#40C2453A"
+            IsVisible="{Binding SevenZipError, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <SelectableTextBlock Text="{Binding SevenZipError}" TextWrapping="Wrap" />
+    </Border>
+    <Border DockPanel.Dock="Top" Classes="banner" Background="#40C2453A"
+            IsVisible="{Binding ErrorMessage, Converter={x:Static ObjectConverters.IsNotNull}}">
+      <DockPanel>
+        <Button DockPanel.Dock="Right" Content="Dismiss" Command="{Binding DismissErrorCommand}" VerticalAlignment="Top" />
+        <SelectableTextBlock Text="{Binding ErrorMessage}" TextWrapping="Wrap" VerticalAlignment="Center" />
+      </DockPanel>
+    </Border>
+
+    <!-- ── Status bar ──────────────────────────────────────────────────────── -->
+    <Border DockPanel.Dock="Bottom" Padding="10,5" BorderThickness="0,1,0,0"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+      <StackPanel Orientation="Horizontal" Spacing="10">
+        <ProgressBar IsIndeterminate="True" Width="80" IsVisible="{Binding IsScanning}" />
+        <ProgressBar IsIndeterminate="True" Width="80" IsVisible="{Binding IsChecking}" />
+        <TextBlock Text="{Binding Status}" VerticalAlignment="Center" />
+      </StackPanel>
+    </Border>
+
+    <TabControl SelectedIndex="{Binding SelectedTab}" Padding="10">
+
+      <!-- ── 1. Choose folders ─────────────────────────────────────────────── -->
+      <TabItem Header="1. Choose folders">
+        <Grid ColumnDefinitions="*,320">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Classes="muted" TextWrapping="Wrap" Margin="0,0,0,8"
+                       Text="Tick a folder to turn it into one .7z archive next to it. Untick a subfolder of a ticked folder to leave it out. Everything else stays as it is." />
+            <TextBlock DockPanel.Dock="Top" Classes="muted" Margin="0,40,0,0" HorizontalAlignment="Center"
+                       Text="Open a folder to see its contents." IsVisible="{Binding !HasRoot}" />
+            <TreeView ItemsSource="{Binding Tree}">
+              <TreeView.Styles>
+                <Style Selector="TreeViewItem" x:DataType="vm:FolderNodeViewModel">
+                  <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                </Style>
+              </TreeView.Styles>
+              <TreeView.ItemTemplate>
+                <TreeDataTemplate x:DataType="vm:FolderNodeViewModel" ItemsSource="{Binding Children}">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <CheckBox IsChecked="{Binding IsMarked, Mode=TwoWay}" IsVisible="{Binding !IsPlaceholder}"
+                              VerticalAlignment="Center" MinWidth="0" Padding="0" />
+                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
+                               Classes.unit="{Binding IsUnit}" Classes.covered="{Binding IsCovered}"
+                               Classes.excluded="{Binding IsExcluded}" Classes.muted="{Binding IsPlaceholder}" />
+                    <TextBlock Text="{Binding MarkText}" Classes="muted" VerticalAlignment="Center" FontStyle="Italic"
+                               IsVisible="{Binding MarkText, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                    <Border Classes="badge" Background="{Binding Hint, Converter={StaticResource HintBrush}}"
+                            IsVisible="{Binding HintText, Converter={x:Static ObjectConverters.IsNotNull}}">
+                      <TextBlock Text="{Binding HintText}" />
+                    </Border>
+                    <TextBlock Text="{Binding SizeText}" Classes="muted" VerticalAlignment="Center" FontSize="12" />
+                    <TextBlock Text="no access" Classes="muted" VerticalAlignment="Center" FontSize="12"
+                               IsVisible="{Binding NoAccess}" />
+                  </StackPanel>
+                </TreeDataTemplate>
+              </TreeView.ItemTemplate>
+            </TreeView>
+          </DockPanel>
+
+          <ScrollViewer Grid.Column="1" Margin="16,0,0,0">
+            <StackPanel Spacing="14">
+              <TextBlock Text="Settings" Classes="heading" />
+
+              <StackPanel Spacing="4">
+                <TextBlock Text="Compression" />
+                <ComboBox ItemsSource="{Binding Levels}" SelectedItem="{Binding SelectedLevel}" HorizontalAlignment="Stretch" />
+              </StackPanel>
+
+              <StackPanel Spacing="4">
+                <TextBlock Text="CPU use" />
+                <ComboBox ItemsSource="{Binding ParallelismLevels}" SelectedItem="{Binding SelectedParallelism}" HorizontalAlignment="Stretch" />
+              </StackPanel>
+
+              <StackPanel Spacing="4">
+                <TextBlock Text="If the archive name is taken" />
+                <ComboBox ItemsSource="{Binding CollisionOptions}" SelectedItem="{Binding SelectedCollision}" HorizontalAlignment="Stretch" />
+              </StackPanel>
+
+              <StackPanel Spacing="4">
+                <TextBlock Text="If a file is locked" />
+                <ComboBox ItemsSource="{Binding LockedOptions}" SelectedItem="{Binding SelectedLocked}" HorizontalAlignment="Stretch" />
+              </StackPanel>
+
+              <StackPanel Spacing="4">
+                <CheckBox IsChecked="{Binding DeleteAfterVerify}">
+                  <TextBlock Text="Delete originals after each archive is verified" TextWrapping="Wrap" />
+                </CheckBox>
+                <TextBlock IsVisible="{Binding DeleteAfterVerify}" TextWrapping="Wrap" FontSize="12" Foreground="#C2453A"
+                           Text="Only files that are unchanged since they were archived are deleted. Anything else is kept and flagged." />
+              </StackPanel>
+
+              <Separator />
+              <TextBlock Text="{Binding SelectionSummary}" TextWrapping="Wrap" />
+              <Button Content="Check →" Command="{Binding CheckCommand}" Classes="accent" HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center" />
+              <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
+                         Text="Check builds the job and opens every file to find problems before anything is written." />
+
+              <Separator />
+              <TextBlock Text="Hints" Classes="heading" />
+              <StackPanel Spacing="4">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Border Classes="badge" Background="#3D9A50"><TextBlock Text="good" /></Border>
+                  <TextBlock Text="mostly text, documents, data" VerticalAlignment="Center" FontSize="12" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Border Classes="badge" Background="#C28A00"><TextBlock Text="average" /></Border>
+                  <TextBlock Text="mixed or unknown types" VerticalAlignment="Center" FontSize="12" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Border Classes="badge" Background="#C2453A"><TextBlock Text="poor" /></Border>
+                  <TextBlock Text="mostly photos, video, archives" VerticalAlignment="Center" FontSize="12" />
+                </StackPanel>
+              </StackPanel>
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <!-- ── 2. Check ──────────────────────────────────────────────────────── -->
+      <TabItem Header="2. Check">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="{Binding PlanSummary}" TextWrapping="Wrap" Margin="0,0,0,8" />
+          <Border DockPanel.Dock="Top" Classes="banner" Background="#40C2453A" Margin="0,0,0,8"
+                  IsVisible="{Binding DeleteAfterVerify}">
+            <TextBlock TextWrapping="Wrap"
+                       Text="Original files will be deleted once their archive is verified. Only files unchanged since archiving are deleted." />
+          </Border>
+
+          <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button Content="← Back" Command="{Binding BackCommand}" />
+            <Button Content="{Binding StartButtonText}" Command="{Binding StartCommand}" Classes="accent" />
+          </StackPanel>
+
+          <Grid RowDefinitions="Auto,2*,Auto,*" IsVisible="{Binding HasPlan}">
+            <Grid ColumnDefinitions="*,80,90,90,80,220" Margin="12,0,12,4">
+              <TextBlock Text="Folder" Classes="muted" />
+              <TextBlock Grid.Column="1" Text="Files" Classes="muted" HorizontalAlignment="Right" />
+              <TextBlock Grid.Column="2" Text="Size" Classes="muted" HorizontalAlignment="Right" />
+              <TextBlock Grid.Column="3" Text="Est. 7z" Classes="muted" HorizontalAlignment="Right" />
+              <TextBlock Grid.Column="4" Text="Hint" Classes="muted" Margin="12,0,0,0" />
+              <TextBlock Grid.Column="5" Text="Archive" Classes="muted" />
+            </Grid>
+            <ListBox Grid.Row="1" ItemsSource="{Binding PlanItems}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:PlanItemRow">
+                  <Grid ColumnDefinitions="*,80,90,90,80,220">
+                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="1" Text="{Binding Files}" HorizontalAlignment="Right" />
+                    <TextBlock Grid.Column="2" Text="{Binding Size}" HorizontalAlignment="Right" />
+                    <TextBlock Grid.Column="3" Text="{Binding Estimate}" HorizontalAlignment="Right" />
+                    <Border Grid.Column="4" Classes="badge" Margin="12,0,0,0" HorizontalAlignment="Left"
+                            Background="{Binding Hint, Converter={StaticResource HintBrush}}"
+                            IsVisible="{Binding HintText, Converter={x:Static ObjectConverters.IsNotNull}}">
+                      <TextBlock Text="{Binding HintText}" />
+                    </Border>
+                    <TextBlock Grid.Column="5" Text="{Binding Output}" TextTrimming="CharacterEllipsis" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+
+            <TextBlock Grid.Row="2" Text="Warnings" Classes="heading" Margin="0,12,0,6" IsVisible="{Binding HasWarnings}" />
+            <ScrollViewer Grid.Row="3">
+              <ItemsControl ItemsSource="{Binding Warnings}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:WarningGroup">
+                    <Expander Header="{Binding Header}" HorizontalAlignment="Stretch" Margin="0,0,0,4">
+                      <ItemsControl ItemsSource="{Binding Lines}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="x:String">
+                            <SelectableTextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </Expander>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </Grid>
+        </DockPanel>
+      </TabItem>
+
+      <!-- ── 3. Run ────────────────────────────────────────────────────────── -->
+      <TabItem Header="3. Run">
+        <DockPanel>
+          <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,10">
+            <ProgressBar Value="{Binding OverallProgress}" Maximum="100" Height="10" />
+            <TextBlock Text="{Binding RunStatus}" Classes="muted" />
+          </StackPanel>
+
+          <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <Button DockPanel.Dock="Right" Content="Stop" Command="{Binding StopCommand}" VerticalAlignment="Top" />
+            <SelectableTextBlock Text="{Binding RunSummary}" TextWrapping="Wrap" Margin="0,0,12,0" />
+          </DockPanel>
+
+          <ListBox ItemsSource="{Binding RunItems}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:JobItemViewModel">
+                <Grid ColumnDefinitions="*,130,180" RowDefinitions="Auto,Auto">
+                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                  <Border Grid.Column="1" Classes="badge" HorizontalAlignment="Left"
+                          Background="{Binding State, Converter={StaticResource StateBrush}}">
+                    <TextBlock Text="{Binding StateText}" />
+                  </Border>
+                  <ProgressBar Grid.Column="2" Value="{Binding Progress}" Maximum="100" VerticalAlignment="Center" />
+                  <SelectableTextBlock Grid.Row="1" Grid.ColumnSpan="3" Text="{Binding Detail}" TextWrapping="Wrap"
+                                       FontSize="12" Opacity="0.8"
+                                       IsVisible="{Binding Detail, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</Window>

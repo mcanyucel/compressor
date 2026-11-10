@@ -512,6 +512,19 @@ The UI is built with **Avalonia** and CommunityToolkit.Mvvm. The layering below 
 * The folder tree is a `TreeView` whose children are loaded lazily on expand (each unexpanded node holds a placeholder child so the expander shows). Large trees must never be loaded up front.
 * The job list uses a virtualizing `ListBox`, or `DataGrid` from the `Avalonia.Controls.DataGrid` package.
 
+### First Version (as built)
+
+Avalonia 12, one window (`CompressorGui`), three tabs that follow the CLI's flow:
+
+1. **Choose folders**: the folder tree and the settings (compression level, CPU use, collisions, locked files, delete originals), plus open folder / load job / save job. Optional command-line argument: a folder or a job file.
+2. **Check**: `JobBuilder` + `PreflightRunner` on a background thread; the planned archives with sizes, estimates and hints, and the warnings grouped in expanders.
+3. **Run**: overall progress, one row per item with state, progress and details (savings, or the full error for items that need attention), a Stop button, and a summary.
+
+* **One checkbox per folder** means "ends up in an archive". Clicks go through `RuleSet.Toggle` (Core), which uses the same nearest-rule-wins logic as the job builder: ticking a folder makes it an archive (shown in bold with its archive name); its subfolders show as covered; unticking a covered subfolder leaves it out (struck through). `RuleSet` converts to and from the job file's rules.
+* **Any change** to marks or settings throws away the checked plan, so what runs is always exactly what was checked. A job runs once; check again to rerun.
+* **Closing the window during a run** stops it (the 7-Zip processes are killed); partial archives are reported as leftovers by the next check.
+* Not yet: per-file marking in the tree (job files support it), a "reset and retry" for items that need attention, settings persistence.
+
 ### Layer Separation
 
 * `JobItem`: data layer, background-thread safe, no Observable
@@ -600,6 +613,8 @@ on job completion, stop the timer and do one final authoritative sync pass acros
 ---
 
 ## Tree View and Compressibility Hints
+
+> **As built:** instead of shallow and deep scans per node, opening a folder starts one background pass over the whole tree (`FolderScanner`, the same file listing as compression, no file reads). It gives every folder its size, file count, estimated archive size and hint at once, so the tree is fully annotated as soon as the scan finishes; the tree is usable while it runs. Re-opening the folder rescans. The design below is kept for reference.
 
 ### Node States
 
@@ -713,6 +728,7 @@ Compressor/
 │   │   └── SourceEnumerator.cs         // file listing: links, lock files, exclusions
 │   ├── Planning/
 │   │   ├── JobBuilder.cs               // rules → effective units → JobItems
+│   │   ├── RuleSet.cs                  // checkbox clicks ↔ rules (nearest rule wins)
 │   │   └── JobFile.cs                  // JSON load / save
 │   ├── Strategies/
 │   │   ├── ICompressionStrategy.cs
@@ -728,21 +744,22 @@ Compressor/
 │   ├── Analysis/
 │   │   ├── CompressibilityTally.cs     // hint + size estimate, weighted by bytes
 │   │   ├── ExtensionLists.cs
-│   │   └── (tree shallow/deep scan: with the UI)
+│   │   └── FolderScanner.cs            // one pass: totals and hints for every folder
 │   └── Preflight/
 │       ├── PreflightRunner.cs
 │       └── PreflightReport.cs
 ├── Cli/                                // console front end (assembly: compressor)
 │   ├── ScanCommand.cs                  // scan <folder> [--depth N] [--write job.json]
 │   └── RunCommand.cs                   // plan <job.json> / run <job.json> [--yes]
-├── Ui/                                 // Avalonia app
+├── Ui/                                 // Avalonia app (assembly: CompressorGui)
+│   ├── Display.cs                      // formatting, hint/state colors
 │   ├── ViewModels/
-│   │   ├── MainWindowViewModel.cs
-│   │   ├── JobItemViewModel.cs
-│   │   └── TreeNodeViewModel.cs
+│   │   ├── MainWindowViewModel.cs      // tree, settings, check, run
+│   │   ├── FolderNodeViewModel.cs      // lazy-loaded tree node with mark state and scan totals
+│   │   └── JobItemViewModel.cs         // one row in the Run tab
 │   └── Views/
 │       ├── MainWindow.axaml
-│       └── MainWindow.axaml.cs
+│       └── MainWindow.axaml.cs         // file/folder pickers only
 ├── Tests/                              // xUnit: dotnet test. 7-Zip tests skip if 7-Zip isn't found (override: COMPRESSOR_7ZIP)
 └── third-party/7zip/
     ├── fetch.ps1                       // downloads + verifies the pinned release (run once after cloning)
