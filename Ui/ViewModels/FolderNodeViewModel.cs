@@ -56,6 +56,7 @@ public partial class FolderNodeViewModel : ObservableObject
     public partial bool IsExpanded { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MarkSuffix))]
     public partial bool NoAccess { get; set; }
 
     partial void OnIsExpandedChanged(bool value)
@@ -95,7 +96,7 @@ public partial class FolderNodeViewModel : ObservableObject
     // ── Marking ──────────────────────────────────────────────────────────────────────
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsMarked), nameof(IsUnit), nameof(IsCovered), nameof(IsExcluded), nameof(MarkText))]
+    [NotifyPropertyChangedFor(nameof(IsMarked), nameof(IsUnit), nameof(IsCovered), nameof(IsExcluded), nameof(MarkSuffix))]
     public partial MarkState Mark { get; set; }
 
     /// <summary>Checked = ends up in an archive. Setting it toggles the rules (see <see cref="RuleSet.Toggle"/>).</summary>
@@ -113,12 +114,16 @@ public partial class FolderNodeViewModel : ObservableObject
     public bool IsCovered => Mark == MarkState.Covered;
     public bool IsExcluded => Mark == MarkState.Excluded;
 
-    public string? MarkText => Mark switch
+    /// <summary>
+    /// Shown after the name, in the same line: the archive this folder becomes, that it's left out, or that it
+    /// can't be read.
+    /// </summary>
+    public string MarkSuffix => (Mark switch
     {
-        MarkState.Unit => $"→ {Path.GetFileName(FullPath.TrimEnd(Path.DirectorySeparatorChar))}.7z",
-        MarkState.Excluded => "left out",
-        _ => null
-    };
+        MarkState.Unit => $"   → {Name}.7z",
+        MarkState.Excluded => "   left out",
+        _ => ""
+    }) + (NoAccess ? "   no access" : "");
 
     public void RefreshMark()
     {
@@ -129,14 +134,22 @@ public partial class FolderNodeViewModel : ObservableObject
 
     // ── Scan results ─────────────────────────────────────────────────────────────────
 
-    [ObservableProperty]
-    public partial string? SizeText { get; set; }
+    // One property per column, so the view can align them.
 
     [ObservableProperty]
     public partial CompressibilityHint Hint { get; set; }
 
     [ObservableProperty]
     public partial string? HintText { get; set; }
+
+    [ObservableProperty]
+    public partial string? SizeText { get; set; }
+
+    [ObservableProperty]
+    public partial string? EstimateText { get; set; }
+
+    [ObservableProperty]
+    public partial string? FilesText { get; set; }
 
     public void RefreshScan()
     {
@@ -147,20 +160,23 @@ public partial class FolderNodeViewModel : ObservableObject
 
         if (scan is null)
         {
-            SizeText = null;
-            HintText = null;
+            // still scanning
+            HintText = SizeText = EstimateText = FilesText = null;
         }
         else if (tally is null)
         {
-            SizeText = "no files";
             Hint = CompressibilityHint.Empty;
             HintText = null;
+            SizeText = EstimateText = "—";
+            FilesText = "0";
         }
         else
         {
-            SizeText = $"{Display.Bytes(tally.TotalBytes)} · {tally.FileCount:N0} files · ~{Display.Bytes(tally.EstimatedArchiveBytes)} as 7z";
             Hint = tally.Hint;
             HintText = Display.Hint(tally.Hint);
+            SizeText = Display.Bytes(tally.TotalBytes);
+            EstimateText = "~" + Display.Bytes(tally.EstimatedArchiveBytes);
+            FilesText = tally.FileCount.ToString("N0");
         }
     }
 

@@ -57,8 +57,17 @@ public partial class MainWindowViewModel : ObservableObject
     internal RuleSet Rules => _rules;
     internal FolderScan? Scan => _scan;
 
+    /// <summary>
+    /// 0 = choose folders, 1 = check, 2 = run. Only the footer buttons move between steps; the step headers are an
+    /// indicator, not navigation, so the Check step can't be reached without actually checking.
+    /// </summary>
     [ObservableProperty]
-    public partial int SelectedTab { get; set; }
+    [NotifyPropertyChangedFor(nameof(IsChooseStep), nameof(IsCheckStep), nameof(IsRunStep))]
+    public partial int Step { get; set; }
+
+    public bool IsChooseStep => Step == 0;
+    public bool IsCheckStep => Step == 1;
+    public bool IsRunStep => Step == 2;
 
     [ObservableProperty]
     public partial string Status { get; set; } = "Open a folder, or load a job file, to start.";
@@ -106,6 +115,7 @@ public partial class MainWindowViewModel : ObservableObject
         _scanCts?.Cancel();
         ClearPlan();
         ErrorMessage = null;
+        Step = 0;
 
         RootPath = Paths.Normalize(path);
         _rules = rules is null ? new RuleSet() : RuleSet.From(rules);
@@ -312,7 +322,7 @@ public partial class MainWindowViewModel : ObservableObject
             });
 
             ShowPlan(job);
-            SelectedTab = 1;
+            Step = 1;
             Status = "Check complete. Review the plan, then start.";
         }
         catch (Exception ex)
@@ -384,8 +394,10 @@ public partial class MainWindowViewModel : ObservableObject
         StartCommand.NotifyCanExecuteChanged();
     }
 
-    [RelayCommand]
-    private void Back() => SelectedTab = 0;
+    private bool CanGoBack() => !IsRunning;
+
+    [RelayCommand(CanExecute = nameof(CanGoBack))]
+    private void Back() => Step = 0;
 
     // ── 3. Run ───────────────────────────────────────────────────────────────────────
 
@@ -396,7 +408,7 @@ public partial class MainWindowViewModel : ObservableObject
     public ObservableCollection<JobItemViewModel> RunItems { get; } = [];
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(CheckCommand), nameof(StartCommand), nameof(StopCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CheckCommand), nameof(StartCommand), nameof(StopCommand), nameof(BackCommand))]
     public partial bool IsRunning { get; set; }
 
     [ObservableProperty]
@@ -431,7 +443,7 @@ public partial class MainWindowViewModel : ObservableObject
         RunSummary = null;
         OverallProgress = 0;
         IsRunning = true;
-        SelectedTab = 2;
+        Step = 2;
         Status = "Running...";
         _runCts = new CancellationTokenSource();
 

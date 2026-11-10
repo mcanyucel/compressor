@@ -514,7 +514,7 @@ The UI is built with **Avalonia** and CommunityToolkit.Mvvm. The layering below 
 
 ### First Version (as built)
 
-Avalonia 12, one window (`CompressorGui`), three tabs that follow the CLI's flow:
+Avalonia 12, one window (`CompressorGui`), three steps that follow the CLI's flow. The step headers at the top are an indicator, not tabs: only the action bar's buttons move between steps, so step 2 can't be reached without checking. The action bar at the bottom is the same on every step: the step's summary on the left, its buttons on the right, the main action (Check, Start) always rightmost.
 
 1. **Choose folders**: the folder tree and the settings (compression level, CPU use, collisions, locked files, delete originals), plus open folder / load job / save job. Optional command-line argument: a folder or a job file.
 2. **Check**: `JobBuilder` + `PreflightRunner` on a background thread; the planned archives with sizes, estimates and hints, and the warnings grouped in expanders.
