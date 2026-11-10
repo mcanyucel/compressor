@@ -61,6 +61,9 @@ public static class SevenZipLocator
                 if (!VerifyBundledHash(options.BundleDirectory, relativeBinary, out error))
                     return false;
 
+                if (!OperatingSystem.IsWindows() && !EnsureExecutable(bundled, out error))
+                    return false;
+
                 executable = new SevenZipExecutable(bundled, SevenZipSource.Bundled);
                 return true;
             }
@@ -148,6 +151,27 @@ public static class SevenZipLocator
 
         error = null;
         return true;
+    }
+
+    /// <summary>
+    /// A build or publish made on Windows doesn't carry the Unix execute bit, so restore it (the hash was just checked).
+    /// </summary>
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private static bool EnsureExecutable(string path, [NotNullWhen(false)] out string? error)
+    {
+        error = null;
+        try
+        {
+            UnixFileMode mode = File.GetUnixFileMode(path);
+            if (!mode.HasFlag(UnixFileMode.UserExecute))
+                File.SetUnixFileMode(path, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            error = $"The bundled 7-Zip is not executable and its permissions can't be changed: {path} ({ex.Message})";
+            return false;
+        }
     }
 
     private static string ToFullBundlePath(string bundleDirectory, string relativeBinary) =>

@@ -1,0 +1,41 @@
+<Project>
+  <!--
+    Copies the bundled 7-Zip into <output>/7zip/, where SevenZipLocator looks for it.
+    The binaries come from fetch.ps1 and are not in git. Without them the build warns, and the app falls back
+    to an installed 7-Zip.
+
+    A build or publish for a specific runtime (-r win-x64, -r linux-arm64, ...) ships only that platform's binary;
+    otherwise all platforms are copied.
+  -->
+  <PropertyGroup>
+    <SevenZipBundleDir>$(MSBuildThisFileDirectory)</SevenZipBundleDir>
+    <SevenZipBundlePlatform Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</SevenZipBundlePlatform>
+    <SevenZipBundlePlatform Condition="$(RuntimeIdentifier.StartsWith('osx'))">osx</SevenZipBundlePlatform>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <SevenZipBundleText Include="$(SevenZipBundleDir)License.txt" Condition="Exists('$(SevenZipBundleDir)License.txt')" />
+    <SevenZipBundleText Include="$(SevenZipBundleDir)VERSION" Condition="Exists('$(SevenZipBundleDir)VERSION')" />
+    <SevenZipBundleText Include="$(SevenZipBundleDir)SHA256SUMS" Condition="Exists('$(SevenZipBundleDir)SHA256SUMS')" />
+    <None Include="@(SevenZipBundleText)"
+          Link="7zip\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(SevenZipBundlePlatform)' == ''">
+    <None Include="$(SevenZipBundleDir)**\7za.exe;$(SevenZipBundleDir)**\7zz"
+          Link="7zip\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(SevenZipBundlePlatform)' != ''">
+    <None Include="$(SevenZipBundleDir)$(SevenZipBundlePlatform)\*"
+          Link="7zip\$(SevenZipBundlePlatform)\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
+  <Target Name="WarnMissingSevenZipBundle" BeforeTargets="Build"
+          Condition="!Exists('$(SevenZipBundleDir)win-x64\7za.exe') And !Exists('$(SevenZipBundleDir)linux-x64\7zz') And !Exists('$(SevenZipBundleDir)osx\7zz')">
+    <Warning Text="Bundled 7-Zip not found. Run third-party/7zip/fetch.ps1 (PowerShell 7). Until then the app uses an installed 7-Zip." />
+  </Target>
+</Project>

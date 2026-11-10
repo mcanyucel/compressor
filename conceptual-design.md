@@ -47,7 +47,9 @@ Goals:
 * Ship the standalone console build from the **7-Zip Extra** package (`7za.exe`) on Windows, and the official `7zz` builds on Linux/macOS. `7za` does not contain the unRAR code, so the unRAR license restriction does not apply. It supports every format this tool needs (7z, zip, tar, gzip, xz).
 * Include 7-Zip's `License.txt`, name the bundled version, and link to the matching source download on 7-zip.org.
 * Pin one version. Store its SHA-256 next to the binary and check it at startup; refuse to run a binary that doesn't match.
-* Lookup order (`SevenZipLocator`): path set in app settings → bundled binary (hash-checked). An installed 7-Zip (Windows registry `HKLM\SOFTWARE\7-Zip`, value `Path`) may be offered as an option, but the bundled copy is the default so behavior is predictable across machines.
+* The binaries are **not in git**. `third-party/7zip/fetch.ps1` (PowerShell 7) downloads the pinned release from the official GitHub releases (`ip7z/7zip`, linked from 7-zip.org), checks each download against a pinned SHA-256, unpacks the console builds and checks them against the committed `SHA256SUMS`. `SevenZip.targets` (imported by the Cli and Tests projects, and later the UI) copies them to `<output>/7zip/`; a build for one runtime (`-r linux-x64`) ships only that platform's binary. Without them the build warns and the app falls back to an installed 7-Zip.
+* A build made on Windows loses the Unix execute bit, so the locator restores it after the hash check.
+* Lookup order (`SevenZipLocator`): path set in app settings → bundled binary (hash-checked; a mismatch is an error, never a reason to fall back) → installed 7-Zip if allowed (Windows registry `HKLM\SOFTWARE\7-Zip`, value `Path`, or `7zz`/`7z` on `PATH`). The bundled copy wins, so behavior is predictable across machines.
 * Do not modify 7-Zip. If that ever becomes necessary, the modified source must be published under the LGPL.
 
 ## Core Concept: Effective Compression Units
@@ -743,12 +745,14 @@ Compressor/
 │       └── MainWindow.axaml.cs
 ├── Tests/                              // xUnit: dotnet test. 7-Zip tests skip if 7-Zip isn't found (override: COMPRESSOR_7ZIP)
 └── third-party/7zip/
-    ├── win-x64/7za.exe
-    ├── linux-x64/7zz
-    ├── osx/7zz
-    ├── License.txt
-    ├── VERSION                         // 7-Zip version shipped
-    └── SHA256SUMS                      // sha256sum format, e.g. "<hex>  win-x64/7za.exe"; checked at startup
+    ├── fetch.ps1                       // downloads + verifies the pinned release (run once after cloning)
+    ├── SevenZip.targets                // copies the bundle to <output>/7zip/
+    ├── README.md                       // license notice, source link, upgrade steps
+    ├── License.txt                     // 7-Zip's license, shipped with the app
+    ├── VERSION                         // 7-Zip version shipped (26.06)
+    ├── SHA256SUMS                      // sha256sum format, e.g. "<hex>  win-x64/7za.exe"; checked at startup
+    ├── win-x86/ win-x64/ win-arm64/    // 7za.exe  (fetched, not in git)
+    └── linux-x64/ linux-arm64/ osx/    // 7zz      (fetched, not in git)
 ```
 
 SharpCompress has been removed; all compression and verification goes through 7-Zip.

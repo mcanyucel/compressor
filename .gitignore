@@ -5,3 +5,8 @@ riderModule.iml
 /_ReSharper.Caches/
 
 *.idea/*
+
+# Bundled 7-Zip binaries: fetched by third-party/7zip/fetch.ps1, checked against SHA256SUMS
+third-party/7zip/win-*/
+third-party/7zip/linux-*/
+third-party/7zip/osx/

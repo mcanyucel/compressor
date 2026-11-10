@@ -22,4 +22,7 @@
     <ProjectReference Include="..\Core\Core.csproj" />
   </ItemGroup>
 
+  <!-- Integration tests run against the bundled 7-Zip when it has been fetched. -->
+  <Import Project="..\third-party\7zip\SevenZip.targets" />
+
 </Project>
