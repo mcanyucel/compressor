@@ -8,7 +8,15 @@ public enum JobItemState
     Done,
     Skipped,
     Cancelled,
-    NeedsAttention // Stopped due to external change - user should review
+    /// <summary>
+    /// The user should review and decide whether to rerun: 7-Zip warnings (e.g. a locked file), failed verification,
+    /// or (v2) a source change during compression.
+    /// </summary>
+    NeedsAttention,
+    /// <summary>
+    /// No archive was produced because of an error (7-Zip failed, unreadable source, unexpected exception).
+    /// </summary>
+    Failed
 }
 
 public enum ItemKind

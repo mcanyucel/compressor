@@ -80,7 +80,7 @@ The reverse does not apply; if all subfolders of a folder are individually marke
 Pure data class - no observable pattern, thus safe to mutate from background threads via `volatile` and `Interlocked`:
 
 ```csharp
-public enum JobItemState { Pending, InProgress, Verified, Done, Skipped, Cancelled, NeedsAttention } 
+public enum JobItemState { Pending, InProgress, Verified, Done, Skipped, Cancelled, NeedsAttention, Failed }
 public enum ItemKind { File, Directory }
 
 public sealed class JobItem
@@ -405,32 +405,29 @@ Note: FSW events can be coalesced or dropped on high-activity volumes. Treat the
 
 ## Execution Loop
 
-```csharp
-await Parallel.ForEachAsync(
-    job.Items.Values,
-    new ParallelOptions { MaxDegreeOfParallelism = config.DegreeOfParallelism },
-    async (item, globalCt) =>
-    {
-        if (item.Cts.IsCancellationRequested) return;
+`JobExecutor.RunAsync(job, stateProgress, ct)` runs a sealed job whose pre-flight has completed (`JobState.ReadyToExecute`); otherwise it throws.
 
-        using var linked = CancellationTokenSource
-            .CreateLinkedTokenSource(item.Cts.Token, globalCt);
+* Only `Pending` items run, so a job can be rerun after resetting the items to retry.
+* Items are ordered **largest first**, so long items don't end up running alone at the end.
+* Up to `JobConfig.ConcurrentItems` items run at once (`Parallel.ForEachAsync`). Each item's token is linked to the global stop token.
+* One item's failure never stops the others: exceptions are caught per item.
+* `Error` and `Stats` are written before the terminal state, so they are safe to read when the state change is reported.
 
-        item.State = JobItemState.InProgress;
-        stateProgress.Report(new JobStateChange(item.SourcePath, JobItemState.InProgress));
+State mapping per item:
 
-        try
-        {
-            await strategy.CompressItemAsync(item, config, linked.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            CleanupTmp(item);
-        }
-    });
-```
+| Result | Item state |
+|---|---|
+| Compressed and verified | `InProgress → Verified → Done` (stats recorded) |
+| Nothing to compress | `Skipped` |
+| 7-Zip warnings (e.g. locked file) | `NeedsAttention`, archive kept as `.7z.tmp` |
+| Verification failed | `NeedsAttention`, archive kept as `.7z` |
+| 7-Zip failed, unreadable source, unexpected exception | `Failed`, no archive |
+| Item cancelled (before or during) | `Cancelled` |
+| Global stop | running and queued items → `Cancelled`; job → `JobState.Cancelled` |
 
-`globalCt` is the 'cancel all' token from the UI stop button. It links to every item's token automatically.
+The job ends as `Completed`, or `CompletedWithErrors` if any item is `NeedsAttention`, `Failed` or `Cancelled`.
+
+Delete-after-verify will run between `Verified` and `Done`. Until it exists, `RunAsync` refuses a job with `DeleteAfterVerify = true`.
 
 ---
 

@@ -89,5 +89,6 @@ public sealed class JobItem
         JobItemState.Done or
         JobItemState.Skipped or
         JobItemState.Cancelled or
-        JobItemState.NeedsAttention;
+        JobItemState.NeedsAttention or
+        JobItemState.Failed;
 }

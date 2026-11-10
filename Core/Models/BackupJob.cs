@@ -104,9 +104,18 @@ public sealed class BackupJob
     {
         FinishedAt = DateTimeOffset.UtcNow;
         OverallState = Items.Values.Any(i =>
-            i.State is JobItemState.NeedsAttention or JobItemState.Cancelled)
+            i.State is JobItemState.NeedsAttention or JobItemState.Cancelled or JobItemState.Failed)
             ? JobState.CompletedWithErrors
             : JobState.Completed;
+    }
+
+    /// <summary>
+    /// The whole job was stopped (global stop button).
+    /// </summary>
+    public void MarkExecutionCancelled()
+    {
+        FinishedAt = DateTimeOffset.UtcNow;
+        OverallState = JobState.Cancelled;
     }
     
     // ── Aggregate Helpers (UI Polling) ─────────────────────────────────────────────────
