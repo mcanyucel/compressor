@@ -1,13 +1,29 @@
+using System.Diagnostics;
 using Core.Analysis;
 using Core.FileSystem;
 using Core.Models;
 
 namespace Core.Preflight;
 
+public sealed class PreflightOptions
+{
+    /// <summary>
+    /// Open every file to find ones 7-Zip won't be able to read. This is by far the slowest part of pre-flight:
+    /// the first open of each file triggers the antivirus scan. Without it, locked files are still handled safely
+    /// during compression (the item needs attention, nothing is deleted).
+    /// </summary>
+    public bool CheckLockedFiles { get; init; } = true;
+}
+
+/// <param name="FilesDone">Files checked so far, across all items.</param>
+/// <param name="FilesTotal">All files in the job, from the job builder's pre-scan.</param>
+public sealed record PreflightProgress(int FilesDone, int FilesTotal);
+
 /// <summary>
 /// The checks that need to touch every file, run after <see cref="Planning.JobBuilder"/> and before execution:
 /// <list type="number">
-/// <item>Locked files: each file is opened for reading, the way 7-Zip opens it.</item>
+/// <item>Locked files (optional, see <see cref="PreflightOptions.CheckLockedFiles"/>): each file is opened for
+/// reading, the way 7-Zip opens it.</item>
 /// <item>Compressibility per item, by file type and size.</item>
 /// <item>Free space on each output drive against the estimated archive sizes.</item>
 /// </list>
@@ -15,7 +31,14 @@ namespace Core.Preflight;
 /// </summary>
 public static class PreflightRunner
 {
-    public static async Task<PreflightReport> RunAsync(BackupJob job, CancellationToken ct = default)
+    private static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(100);
+
+    public static Task<PreflightReport> RunAsync(BackupJob job, CancellationToken ct = default) =>
+        RunAsync(job, new PreflightOptions(), progress: null, ct);
+
+    /// <param name="progress">Reported about every 100 ms, and once at the end.</param>
+    public static async Task<PreflightReport> RunAsync(
+        BackupJob job, PreflightOptions options, IProgress<PreflightProgress>? progress = null, CancellationToken ct = default)
     {
         if (job.OverallState is not (JobState.ReadyForPreflight or JobState.RunningPreflight or JobState.ReadyToExecute))
             throw new InvalidOperationException($"Pre-flight needs a sealed job that hasn't run yet (state: {job.OverallState}).");
@@ -23,6 +46,7 @@ public static class PreflightRunner
         PreflightReport report = job.Preflight ??= new PreflightReport();
         job.MarkPreflightStarted();
 
+        report.LockedFilesChecked = options.CheckLockedFiles;
         report.LockedFiles.Clear();
         report.PoorlyCompressible.Clear();
         report.LowDiskSpace.Clear();
@@ -30,6 +54,11 @@ public static class PreflightRunner
 
         await Task.Run(() =>
         {
+            int total = job.Items.Values.Sum(i => i.TotalFileCount);
+            int done = 0;
+            var sinceReport = Stopwatch.StartNew();
+            progress?.Report(new PreflightProgress(0, total));
+
             foreach (JobItem item in job.Items.Values.OrderBy(i => i.SourcePath, Paths.Comparer))
             {
                 var tally = new CompressibilityTally();
@@ -37,8 +66,16 @@ public static class PreflightRunner
                 foreach (FileInfo file in ListFiles(item, report, ct))
                 {
                     tally.Add(file.Name, file.Length);
-                    if (IsLocked(file))
+                    if (options.CheckLockedFiles && IsLocked(file))
                         report.LockedFiles.Add(file.FullName);
+
+                    done++;
+                    if (progress is not null && sinceReport.Elapsed >= ProgressInterval)
+                    {
+                        // Files added since the pre-scan can push done past total; don't show more than 100%.
+                        progress.Report(new PreflightProgress(Math.Min(done, total), total));
+                        sinceReport.Restart();
+                    }
                 }
 
                 report.Estimates[item.SourcePath] = new ItemEstimate(tally.Hint, tally.EstimatedArchiveBytes);
@@ -47,6 +84,7 @@ public static class PreflightRunner
             }
 
             CheckDiskSpace(job, report);
+            progress?.Report(new PreflightProgress(total, total));
         }, ct);
 
         job.MarkPreflightCompleted();

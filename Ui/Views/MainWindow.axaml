@@ -142,12 +142,14 @@
             BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
       <DockPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-          <Button Content="← Back" Command="{Binding BackCommand}" IsVisible="{Binding IsCheckStep}" />
+          <Button Content="← Back" Command="{Binding BackCommand}" IsVisible="{Binding ShowCheckActions}" />
           <Button Content="← Choose folders" Command="{Binding BackCommand}" IsVisible="{Binding IsRunStep}" />
           <Button Content="Stop" Command="{Binding StopCommand}" IsVisible="{Binding IsRunStep}" Classes="action" />
-          <Button Content="Check →" Command="{Binding CheckCommand}" IsVisible="{Binding IsChooseStep}" Classes="accent action"
-                  ToolTip.Tip="Builds the job and opens every file to find problems before anything is written." />
-          <Button Content="{Binding StartButtonText}" Command="{Binding StartCommand}" IsVisible="{Binding IsCheckStep}"
+          <Button Content="{Binding CheckButtonText}" Command="{Binding CheckCommand}" IsVisible="{Binding IsChooseStep}"
+                  Classes="accent action"
+                  ToolTip.Tip="Builds the job and checks for problems before anything is written." />
+          <Button Content="Cancel" Command="{Binding CancelCheckCommand}" IsVisible="{Binding IsChecking}" Classes="action" />
+          <Button Content="{Binding StartButtonText}" Command="{Binding StartCommand}" IsVisible="{Binding ShowCheckActions}"
                   Classes="accent action" />
         </StackPanel>
         <Panel Margin="0,0,16,0" VerticalAlignment="Center">
@@ -222,7 +224,8 @@
         </DockPanel>
 
         <ScrollViewer Grid.Column="1" Margin="16,0,0,0">
-          <StackPanel Spacing="14">
+          <!-- Right margin keeps the text clear of the scrollbar. -->
+          <StackPanel Spacing="14" Margin="0,0,16,0">
             <TextBlock Text="Settings" Classes="heading" />
 
             <StackPanel Spacing="4">
@@ -246,11 +249,30 @@
             </StackPanel>
 
             <StackPanel Spacing="4">
-              <CheckBox IsChecked="{Binding DeleteAfterVerify}">
+              <CheckBox IsChecked="{Binding DeleteAfterVerify}" AutomationProperties.Name="Delete originals after each archive is verified">
                 <TextBlock Text="Delete originals after each archive is verified" TextWrapping="Wrap" />
               </CheckBox>
               <TextBlock IsVisible="{Binding DeleteAfterVerify}" TextWrapping="Wrap" FontSize="12" Foreground="#C2453A"
                          Text="Only files that are unchanged since they were archived are deleted. Anything else is kept and flagged." />
+            </StackPanel>
+
+            <Separator />
+            <TextBlock Text="Checking" Classes="heading" />
+
+            <StackPanel Spacing="4">
+              <CheckBox IsChecked="{Binding CheckLockedFiles}" AutomationProperties.Name="Look for locked files first">
+                <TextBlock Text="Look for locked files first (slow: opens every file)" TextWrapping="Wrap" />
+              </CheckBox>
+              <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
+                         Text="Without this, a locked file is found during compression instead: that folder is flagged for review and nothing is deleted." />
+            </StackPanel>
+
+            <StackPanel Spacing="4">
+              <CheckBox IsChecked="{Binding StartAutomatically}" AutomationProperties.Name="Start automatically after checking">
+                <TextBlock Text="Start automatically after checking" TextWrapping="Wrap" />
+              </CheckBox>
+              <TextBlock Classes="muted" FontSize="12" TextWrapping="Wrap"
+                         Text="So you can walk away: compression starts as soon as the check is done, unless disk space may run out." />
             </StackPanel>
 
             <Separator />
@@ -280,6 +302,17 @@
           <TextBlock TextWrapping="Wrap"
                      Text="Original files will be deleted once their archive is verified. Only files unchanged since archiving are deleted." />
         </Border>
+
+        <Panel>
+        <!-- While checking: a bar that fills up, so it's clear the check is moving (and much faster than compressing). -->
+        <StackPanel IsVisible="{Binding IsChecking}" Spacing="8" VerticalAlignment="Top" Margin="0,8,0,0" MaxWidth="720"
+                    HorizontalAlignment="Left">
+          <TextBlock Text="Checking…" Classes="heading" />
+          <ProgressBar Value="{Binding CheckProgress}" Maximum="100" Height="10"
+                       IsIndeterminate="{Binding !IsCheckProgressKnown}" />
+          <TextBlock Text="{Binding CheckProgressText}" />
+          <TextBlock Text="{Binding CheckExplanation}" Classes="muted" FontSize="12" TextWrapping="Wrap" />
+        </StackPanel>
 
         <Grid RowDefinitions="Auto,2*,Auto,*" IsVisible="{Binding HasPlan}">
           <!-- Same column order as the folder tree; same scrollbar margin in header and rows. -->
@@ -330,6 +363,7 @@
             </ItemsControl>
           </ScrollViewer>
         </Grid>
+        </Panel>
       </DockPanel>
 
       <!-- ── 3. Run ────────────────────────────────────────────────────────── -->

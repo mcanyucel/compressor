@@ -46,6 +46,36 @@ public class PreflightRunnerTests : IDisposable
         }
     }
 
+    [WindowsFact]
+    public async Task LockedFileCheck_CanBeSkipped()
+    {
+        string locked = _dir.WriteFile(Path.Combine("Docs", "locked.txt"));
+        BackupJob job = Build("Docs");
+
+        using (TestJobs.Lock(locked))
+        {
+            PreflightReport report = await PreflightRunner.RunAsync(job, new PreflightOptions { CheckLockedFiles = false });
+
+            Assert.Empty(report.LockedFiles);
+            Assert.False(report.LockedFilesChecked);
+            Assert.NotEmpty(report.Estimates); // the rest still runs
+        }
+    }
+
+    [Fact]
+    public async Task ReportsProgressUpToTheTotal()
+    {
+        for (int i = 0; i < 50; i++) _dir.WriteFile(Path.Combine("Docs", $"{i}.txt"));
+        BackupJob job = Build("Docs");
+        var reports = new List<PreflightProgress>();
+
+        await PreflightRunner.RunAsync(job, new PreflightOptions(), new SyncProgress<PreflightProgress>(reports.Add));
+
+        Assert.Equal(new PreflightProgress(0, 50), reports[0]);
+        Assert.Equal(new PreflightProgress(50, 50), reports[^1]);
+        Assert.All(reports, r => Assert.InRange(r.FilesDone, 0, r.FilesTotal));
+    }
+
     [Fact]
     public async Task AddsToTheBuildersReport()
     {

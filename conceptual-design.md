@@ -351,6 +351,9 @@ Split between two steps that fill the same `PreflightReport`:
 * `PreflightRunner` (touches every file): locked files, compressibility per item, and free space per output drive.
   * Locked files are found by opening each file with `FileShare.Read`, the way 7-Zip opens it, so the result matches what compression will hit.
   * Free space is compared with the estimated archive sizes (see below), not the source sizes.
+  * Progress (`PreflightProgress`: files done / total, from the builder's pre-scan) is reported about every 100 ms.
+
+**Cost, measured** on real project folders (Windows, Defender on): listing 124k–175k files takes about 1 s per pass; opening each of them the first time took 31 s and 159 s, because the antivirus scans every file on its first open since it changed (a second open of the same files took 1–3 s; opening 8 at a time did not help). So the locked-file check is optional (`PreflightOptions.CheckLockedFiles`): **off by default in the UI**, on in the CLI's `plan`/`run`. Without it, a locked file is still handled safely during compression (7-Zip warning → `NeedsAttention`, nothing deleted). Compression has to open every file anyway, so a full check mostly moves that antivirus cost from Run to Check rather than adding it.
 
 Locating 7-Zip is done by the front end before building the job, since a missing 7-Zip blocks everything.
 
@@ -522,6 +525,8 @@ Avalonia 12, one window (`CompressorGui`), three steps that follow the CLI's flo
 
 * **One checkbox per folder** means "ends up in an archive". Clicks go through `RuleSet.Toggle` (Core), which uses the same nearest-rule-wins logic as the job builder: ticking a folder makes it an archive (shown in bold with its archive name); its subfolders show as covered; unticking a covered subfolder leaves it out (struck through). `RuleSet` converts to and from the job file's rules.
 * **Any change** to marks or settings throws away the checked plan, so what runs is always exactly what was checked. A job runs once; check again to rerun.
+* **Checking shows a filling progress bar** on the Check step ("52,000 of 175,443 files checked · 40 s") and can be cancelled. While the job is being built (total not known yet) the bar is indeterminate.
+* **"Start automatically after checking"** (the button becomes "Check and start →") lets a long job run unattended: the run starts as soon as the check is done, unless the check warns that disk space may run out. Without it, a user who walks away after pressing Check would come back to a plan waiting for confirmation.
 * **Closing the window during a run** stops it (the 7-Zip processes are killed); partial archives are reported as leftovers by the next check.
 * Not yet: per-file marking in the tree (job files support it), a "reset and retry" for items that need attention, settings persistence.
 

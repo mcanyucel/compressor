@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -62,7 +63,7 @@ public partial class MainWindowViewModel : ObservableObject
     /// indicator, not navigation, so the Check step can't be reached without actually checking.
     /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsChooseStep), nameof(IsCheckStep), nameof(IsRunStep))]
+    [NotifyPropertyChangedFor(nameof(IsChooseStep), nameof(IsCheckStep), nameof(IsRunStep), nameof(ShowCheckActions))]
     public partial int Step { get; set; }
 
     public bool IsChooseStep => Step == 0;
@@ -113,6 +114,7 @@ public partial class MainWindowViewModel : ObservableObject
         }
 
         _scanCts?.Cancel();
+        _checkCts?.Cancel();
         ClearPlan();
         ErrorMessage = null;
         Step = 0;
@@ -227,6 +229,19 @@ public partial class MainWindowViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(StartButtonText))]
     public partial bool DeleteAfterVerify { get; set; }
 
+    /// <summary>Off by default: opening every file is what makes a check slow (see PreflightOptions).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CheckExplanation))]
+    public partial bool CheckLockedFiles { get; set; }
+
+    /// <summary>Start the run as soon as the check is done, so a long job can be left unattended.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CheckButtonText))]
+    public partial bool StartAutomatically { get; set; }
+
+    public string CheckButtonText => StartAutomatically ? "Check and start →" : "Check →";
+
+    partial void OnCheckLockedFilesChanged(bool value) => ClearPlan();
     partial void OnSelectedLevelChanged(Option<int> value) => ClearPlan();
     partial void OnSelectedParallelismChanged(Option<ParallelismLevel> value) => ClearPlan();
     partial void OnSelectedCollisionChanged(Option<CollisionBehavior> value) => ClearPlan();
@@ -294,7 +309,27 @@ public partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(CheckCommand))]
+    [NotifyPropertyChangedFor(nameof(ShowCheckActions))]
     public partial bool IsChecking { get; set; }
+
+    /// <summary>Back and Start on step 2; while checking, only Cancel is shown there.</summary>
+    public bool ShowCheckActions => IsCheckStep && !IsChecking;
+
+    [ObservableProperty]
+    public partial double CheckProgress { get; set; }
+
+    /// <summary>False while the job is being built (file count not known yet): the bar is indeterminate.</summary>
+    [ObservableProperty]
+    public partial bool IsCheckProgressKnown { get; set; }
+
+    [ObservableProperty]
+    public partial string? CheckProgressText { get; set; }
+
+    public string CheckExplanation => CheckLockedFiles
+        ? "Opening each file once to find locked ones. Still much faster than compressing, but your antivirus scans every file the first time it's opened."
+        : "Listing files and estimating archive sizes. This usually takes seconds.";
+
+    private CancellationTokenSource? _checkCts;
 
     public bool HasPlan => _job is not null;
     public bool HasWarnings => Warnings.Count > 0;
@@ -307,34 +342,80 @@ public partial class MainWindowViewModel : ObservableObject
     private async Task CheckAsync()
     {
         JobConfig config = BuildConfig();
-        ClearPlan();
-        IsChecking = true;
-        ErrorMessage = null;
-        Status = "Checking: building the job and opening every file...";
+        var options = new PreflightOptions { CheckLockedFiles = CheckLockedFiles };
+        bool startAfter = StartAutomatically;
 
+        ClearPlan();
+        PlanSummary = null;
+        ErrorMessage = null;
+        IsChecking = true;
+        Step = 1; // the progress is shown on the Check step
+
+        var cts = _checkCts = new CancellationTokenSource();
+        var elapsed = Stopwatch.StartNew();
+        string verb = options.CheckLockedFiles ? "opened" : "checked";
+        IsCheckProgressKnown = false;
+        CheckProgress = 0;
+        CheckProgressText = "Listing files...";
+        Status = "Checking...";
+
+        var progress = new Progress<PreflightProgress>(p =>
+        {
+            if (_checkCts != cts) return;
+            IsCheckProgressKnown = true;
+            CheckProgress = p.FilesTotal > 0 ? 100.0 * p.FilesDone / p.FilesTotal : 100;
+            CheckProgressText = $"{p.FilesDone:N0} of {p.FilesTotal:N0} files {verb} · {Display.Duration(elapsed.Elapsed)}";
+        });
+
+        BackupJob job;
         try
         {
-            BackupJob job = await Task.Run(async () =>
+            job = await Task.Run(async () =>
             {
-                BackupJob built = JobBuilder.Build(config);
-                await PreflightRunner.RunAsync(built);
+                BackupJob built = JobBuilder.Build(config, cts.Token);
+                await PreflightRunner.RunAsync(built, options, progress, cts.Token);
                 return built;
-            });
-
-            ShowPlan(job);
-            Step = 1;
-            Status = "Check complete. Review the plan, then start.";
+            }, cts.Token);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            if (_checkCts == cts) Step = 0; // not if a new folder was opened meanwhile
+            Status = "Check cancelled.";
+            return;
         }
         catch (Exception ex)
         {
             ErrorMessage = $"Check failed: {ex.Message}";
             Status = "Check failed.";
+            Step = 0;
+            return;
         }
         finally
         {
+            if (_checkCts == cts) _checkCts = null;
             IsChecking = false;
         }
+
+        ShowPlan(job);
+        Status = $"Check finished in {Display.Duration(elapsed.Elapsed)}.";
+
+        if (!startAfter)
+        {
+            Status += " Review the plan, then start.";
+        }
+        else if (job.Preflight!.LowDiskSpace.Count > 0)
+        {
+            Status += " Not started automatically: disk space may run out. Review the warnings.";
+        }
+        else if (StartCommand.CanExecute(null))
+        {
+            await StartCommand.ExecuteAsync(null);
+        }
     }
+
+    /// <summary>Cancel a running check and go back to choosing folders.</summary>
+    [RelayCommand]
+    private void CancelCheck() => _checkCts?.Cancel();
 
     private void ShowPlan(BackupJob job)
     {
@@ -371,7 +452,8 @@ public partial class MainWindowViewModel : ObservableObject
         PlanSummary = job.Items.IsEmpty
             ? "Nothing to compress."
             : $"{job.Items.Count} archive(s) from {Display.Bytes(total)} of files, about {Display.Bytes(estimated)} after compression (rough estimate)." +
-              (Warnings.Count == 0 ? " No warnings." : "");
+              (Warnings.Count == 0 ? " No warnings." : "") +
+              (report.LockedFilesChecked ? "" : " Locked files weren't checked; any that 7-Zip can't read will be flagged during the run.");
 
         OnPropertyChanged(nameof(HasPlan));
         OnPropertyChanged(nameof(HasWarnings));

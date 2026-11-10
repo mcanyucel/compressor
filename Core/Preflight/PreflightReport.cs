@@ -33,6 +33,9 @@ public sealed class PreflightReport
     /// <summary>Files that could not be opened for reading. 7-Zip would skip them.</summary>
     public List<string> LockedFiles { get; } = [];
 
+    /// <summary>False when the locked-file check was skipped; <see cref="LockedFiles"/> is then empty.</summary>
+    public bool LockedFilesChecked { get; set; }
+
     /// <summary>Source paths of items whose content is mostly incompressible.</summary>
     public List<string> PoorlyCompressible { get; } = [];
 

@@ -10,6 +10,12 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
+  <!-- Release builds carry no debug symbols. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.1.6" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
@@ -27,5 +33,13 @@
   </ItemGroup>
 
   <Import Project="..\third-party\7zip\SevenZip.targets" />
+
+  <!-- SkiaSharp and HarfBuzz ship ~100 MB of native .pdb files; keep them out of Release publishes. -->
+  <Target Name="DropDebugSymbolsFromReleasePublish" AfterTargets="ComputeResolvedFilesToPublishList"
+          Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
 
 </Project>
