@@ -727,7 +727,7 @@ Compressor/
 │   └── Views/
 │       ├── MainWindow.axaml
 │       └── MainWindow.axaml.cs
-├── Tests/
+├── Tests/                              // xUnit: dotnet test. 7-Zip tests skip if 7-Zip isn't found (override: COMPRESSOR_7ZIP)
 └── third-party/7zip/
     ├── win-x64/7za.exe
     ├── linux-x64/7zz
