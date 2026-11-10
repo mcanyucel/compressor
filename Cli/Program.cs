@@ -19,6 +19,7 @@ try
 
     return parsed.Command switch
     {
+        "version" or "--version" => PrintVersion(),
         "scan" => ScanCommand.Run(parsed),
         "plan" => await RunCommand.RunAsync(parsed, execute: false),
         "run" => await RunCommand.RunAsync(parsed, execute: true),
@@ -28,6 +29,16 @@ try
 catch (UsageException ex)
 {
     return Usage(ex.Message);
+}
+
+// The release version from Directory.Build.props, e.g. "0.1.0".
+static int PrintVersion()
+{
+    Console.WriteLine(typeof(Arguments).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+        .FirstOrDefault()?.InformationalVersion ?? "unknown");
+    return ExitCodes.Ok;
 }
 
 static int Usage(string message)

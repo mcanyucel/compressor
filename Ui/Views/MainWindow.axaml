@@ -5,6 +5,7 @@
         x:Class="Ui.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="Compressor"
+        Icon="/Assets/compressor.ico"
         Width="1150" Height="760" MinWidth="820" MinHeight="520">
 
   <Window.Resources>
@@ -99,6 +100,15 @@
           <Button Content="Load job…" Click="OnLoadJob" IsEnabled="{Binding !IsRunning}" />
           <Button Content="Save job…" Click="OnSaveJob" IsEnabled="{Binding HasRoot}" />
         </StackPanel>
+        <Button DockPanel.Dock="Right" Content="Help" Margin="12,0,0,0" AutomationProperties.Name="Help">
+          <Button.Flyout>
+            <MenuFlyout Placement="BottomEdgeAlignedRight">
+              <MenuItem Header="Check for updates…" Click="OnCheckForUpdates" />
+              <Separator />
+              <MenuItem Header="About Compressor" Click="OnAbout" />
+            </MenuFlyout>
+          </Button.Flyout>
+        </Button>
         <TextBlock DockPanel.Dock="Right" Text="{Binding SevenZipStatus}" Classes="muted" VerticalAlignment="Center" />
         <TextBlock Text="{Binding RootPath}" VerticalAlignment="Center" Margin="16,0"
                    TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />

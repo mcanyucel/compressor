@@ -10,3 +10,6 @@ riderModule.iml
 third-party/7zip/win-*/
 third-party/7zip/linux-*/
 third-party/7zip/osx/
+
+# Release builds (installer/build.ps1)
+artifacts/

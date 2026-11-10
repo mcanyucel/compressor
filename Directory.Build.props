@@ -1,0 +1,12 @@
+<Project>
+    <!-- The release version: the update check, the CLI's version command and the installer read it from here.
+         Raise it before building a release (installer\build.ps1). -->
+    <PropertyGroup>
+        <Version>0.1.0</Version>
+        <Product>Compressor</Product>
+        <Company>Mustafa Can Yücel</Company>
+        <Copyright>© 2026 Mustafa Can Yücel</Copyright>
+        <!-- The version command prints "0.1.0", not "0.1.0+(commit hash)". -->
+        <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    </PropertyGroup>
+</Project>

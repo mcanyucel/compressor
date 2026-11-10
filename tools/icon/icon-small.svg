@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- icon.svg reduced to what reads at 16-32 px: the zipped amber folder between the two arrows that squeeze it. -->
+  <defs><clipPath id="t"><rect x="1" y="1" width="30" height="30" rx="6"/></clipPath></defs>
+  <g clip-path="url(#t)">
+    <rect width="32" height="32" fill="#F2F5F8"/>
+    <g fill="#1C4E9C">
+      <polygon points="3,11 9,17 3,23"/>
+      <polygon points="29,11 23,17 29,23"/>
+    </g>
+    <g fill="#F2A93B" stroke="#9A5B0F" stroke-width="1" stroke-linejoin="round">
+      <rect x="10.5" y="6.5" width="6" height="4" rx="1.2"/>
+      <rect x="10.5" y="8.5" width="11" height="17" rx="1.8"/>
+    </g>
+    <g fill="#3C4652">
+      <rect x="14.5" y="11" width="1.5" height="1.5"/>
+      <rect x="16" y="13" width="1.5" height="1.5"/>
+      <rect x="14.5" y="15" width="1.5" height="1.5"/>
+      <rect x="16" y="17" width="1.5" height="1.5"/>
+      <rect x="14.5" y="19" width="1.5" height="1.5"/>
+      <rect x="16" y="21" width="1.5" height="1.5"/>
+    </g>
+  </g>
+  <rect x="1.25" y="1.25" width="29.5" height="29.5" rx="5.8" fill="none" stroke="#AEB8C4" stroke-width="0.5"/>
+</svg>

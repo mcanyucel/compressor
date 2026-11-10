@@ -8,7 +8,13 @@
     <AssemblyName>CompressorGui</AssemblyName>
     <RootNamespace>Ui</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- The exe's icon (Explorer, taskbar pins); the window icon is set in MainWindow.axaml. tools/icon makes both. -->
+    <ApplicationIcon>Assets\compressor.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
 
   <!-- Release builds carry no debug symbols. -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -26,6 +32,8 @@
       <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <!-- Update checks through app-update-server (github.com/mcanyucel/app-update-client). -->
+    <PackageReference Include="Bridgewiz.AppUpdate.Avalonia" Version="1.0.0" />
   </ItemGroup>
 
   <ItemGroup>

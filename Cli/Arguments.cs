@@ -1,4 +1,4 @@
-namespace Cli;
+﻿namespace Cli;
 
 public static class ExitCodes
 {
@@ -30,6 +30,9 @@ public sealed class Arguments
 
           compressor run <job.json> [--yes]
               Build, check, confirm, then compress and verify. --yes skips the confirmation.
+
+          compressor version
+              Print the version.
 
         Options:
           --7zip <path>   7-Zip executable to use (default: bundled copy, else installed 7-Zip)

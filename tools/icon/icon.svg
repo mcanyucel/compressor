@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Compressor: a folder tree in which one branch has become an archive (the narrower, zipped amber folder that two
+       arrows squeeze); the rest of the tree stays as it is. Sizes above 32 px use this file; icon-small.svg is the same
+       idea drawn for 16-32 px. -->
+  <defs>
+    <clipPath id="tile"><rect x="8" y="8" width="240" height="240" rx="44"/></clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="256" height="256" fill="#F2F5F8"/>
+
+    <!-- The tree: trunk and two branches; the lower branch ends in an arrow pointing at the archive. -->
+    <g stroke="#1C4E9C" stroke-width="10" stroke-linecap="round" fill="none">
+      <line x1="62" y1="98" x2="62" y2="204"/>
+      <line x1="62" y1="142" x2="100" y2="142"/>
+      <line x1="62" y1="204" x2="104" y2="204"/>
+      <line x1="238" y1="204" x2="214" y2="204"/>
+    </g>
+    <polygon points="100,188 125,204 100,220" fill="#1C4E9C"/>
+    <polygon points="218,188 193,204 218,220" fill="#1C4E9C"/>
+
+    <!-- The root folder. -->
+    <g fill="#1C4E9C">
+      <rect x="36" y="34" width="42" height="22" rx="7"/>
+      <rect x="36" y="44" width="92" height="56" rx="9"/>
+    </g>
+
+    <!-- A folder that stays as it is. -->
+    <g fill="#FFFFFF" stroke="#1C4E9C" stroke-width="8" stroke-linejoin="round">
+      <rect x="104" y="108" width="44" height="20" rx="6"/>
+      <rect x="104" y="117" width="112" height="50" rx="8"/>
+    </g>
+
+    <!-- The folder that became an archive: narrower, amber, zipped. -->
+    <g fill="#F2A93B" stroke="#9A5B0F" stroke-width="6" stroke-linejoin="round">
+      <rect x="132" y="172" width="28" height="18" rx="5"/>
+      <rect x="132" y="180" width="56" height="48" rx="8"/>
+    </g>
+    <g fill="#3C4652">
+      <rect x="153" y="187" width="7" height="5"/>
+      <rect x="160" y="194" width="7" height="5"/>
+      <rect x="153" y="201" width="7" height="5"/>
+      <rect x="160" y="208" width="7" height="5"/>
+      <rect x="153" y="215" width="7" height="5"/>
+    </g>
+  </g>
+  <rect x="9.5" y="9.5" width="237" height="237" rx="43" fill="none" stroke="#AEB8C4" stroke-width="3"/>
+</svg>
