@@ -18,4 +18,19 @@ public enum CompressionOutcome
     Failed
 }
 
-public sealed record CompressionResult(CompressionOutcome Outcome, string? Message = null);
+public sealed record CompressionResult(CompressionOutcome Outcome, string? Message = null)
+{
+    /// <summary>
+    /// The files handed to 7-Zip, as they were just before compression. Set when <see cref="Outcome"/> is
+    /// <see cref="CompressionOutcome.Completed"/>; this is what <see cref="VerificationHelpers"/> checks the archive against.
+    /// </summary>
+    public IReadOnlyList<ArchivedFile> Files { get; init; } = [];
+}
+
+/// <summary>
+/// One file as it was when handed to 7-Zip.
+/// </summary>
+/// <param name="RelativePath">Path inside the archive, relative to the item's source root.</param>
+/// <param name="Size">Size in bytes just before compression.</param>
+/// <param name="LastWriteTimeUtc">Kept so the delete-originals step can check the source hasn't changed since.</param>
+public sealed record ArchivedFile(string RelativePath, long Size, DateTime LastWriteTimeUtc);

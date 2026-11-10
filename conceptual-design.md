@@ -233,10 +233,21 @@ Write file list (UTF-8) for the item
 Rename .7z.tmp → .7z
       ↓
 Verify: 7za t   (re-reads the archive and checks every CRC)
-Verify: 7za l   (file count in archive == file count enumerated at job-build time)
+Verify: 7za l   (archive holds exactly the files handed to 7-Zip, same paths and sizes)
       ↓
-[Optional] Delete originals
+[Optional] Delete originals (only if each source file's size and modified time still match)
 ```
+
+### Verification
+
+`CompressAsync` records each file's relative path, size and modified time just before handing the list to 7-Zip (`CompressionResult.Files`). `VerificationHelpers.VerifyAsync` then:
+
+1. Runs `7za t`: any CRC error fails verification.
+2. Runs `7za l -slt` and compares the file entries with the recorded list. It reports files missing from the archive, unexpected files, and size mismatches (a file that changed while being compressed).
+
+This is stricter than comparing file counts, which would miss one file skipped and another added. Path comparison ignores case on Windows and macOS.
+
+The recorded modified times are for the delete step: a source file that changed after compression must not be deleted.
 
 Writing to `.7z.tmp` first means interrupted jobs leave no orphan corrupted .7z files. On next launch, stale `.7z.tmp` files are detected and either cleaned up or flagged.
 
@@ -324,7 +335,7 @@ Analyzing job...
 
 ## FileSystemWatcher (v2)
 
-> **Deferred to v2.** v1 does not watch the file system. The folders being archived are expected to be idle; pre-flight checks and post-compression verification (CRC and file count) catch most problems. The design below is kept for v2.
+> **Deferred to v2.** v1 does not watch the file system. The folders being archived are expected to be idle; pre-flight checks and post-compression verification (CRC check, plus paths and sizes) catch most problems. The design below is kept for v2.
 
 One watcher instance on the topmost root folder, `IncludeSubdirectories = true`. Two consumers:
 
@@ -660,7 +671,7 @@ Compressor/
 │   │   └── SevenZipRunner.cs           // process wrapper: args, progress parsing, exit codes, kill on cancel
 │   ├── Compression/
 │   │   ├── CompressionHelpers.cs       // file collection, collisions, .7z.tmp handling
-│   │   └── VerificationHelpers.cs      // 7za t + file count via 7za l
+│   │   └── VerificationHelpers.cs      // 7za t + contents check via 7za l
 │   ├── Execution/
 │   │   └── JobExecutor.cs              // Parallel.ForEachAsync loop
 │   ├── Analysis/

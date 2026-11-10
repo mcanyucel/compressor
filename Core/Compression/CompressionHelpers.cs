@@ -29,17 +29,33 @@ public static class CompressionHelpers
             : Path.GetDirectoryName(item.SourcePath)
               ?? throw new InvalidOperationException($"File item has no parent directory: {item.SourcePath}");
 
-        IReadOnlyList<string> files = await Task.Run(() => CollectFiles(item), ct);
+        List<ArchivedFile> files;
+        try
+        {
+            files = await Task.Run(() => CollectFiles(item)
+                .Select(path =>
+                {
+                    var info = new FileInfo(path);
+                    return new ArchivedFile(Path.GetRelativePath(sourceRoot, path), info.Length, info.LastWriteTimeUtc);
+                })
+                .ToList(), ct);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A folder we can't read, or a file that disappeared between listing and reading its size.
+            return new CompressionResult(CompressionOutcome.Failed, $"Could not read the source files: {ex.Message}");
+        }
+
         if (files.Count == 0)
             return new CompressionResult(CompressionOutcome.NothingToCompress);
 
-        long totalBytes = item.TotalBytes > 0 ? item.TotalBytes : files.Sum(f => new FileInfo(f).Length);
+        long totalBytes = item.TotalBytes > 0 ? item.TotalBytes : files.Sum(f => f.Size);
 
         var request = new SevenZipAddRequest
         {
             ArchivePath = tmpPath,
             WorkingDirectory = sourceRoot,
-            Files = files.Select(f => Path.GetRelativePath(sourceRoot, f)).ToList(),
+            Files = files.Select(f => f.RelativePath).ToList(),
             CompressionLevel = config.CompressionLevel,
             Threads = config.ThreadsPerItem,
             StopOnUnreadableFile = config.LockedFileBehavior == LockedFileBehavior.AbortSubJob
@@ -88,7 +104,7 @@ public static class CompressionHelpers
 
         Interlocked.Exchange(ref item.BytesProcessed, totalBytes);
         Interlocked.Exchange(ref item.FilesProcessed, files.Count);
-        return new CompressionResult(CompressionOutcome.Completed);
+        return new CompressionResult(CompressionOutcome.Completed) { Files = files };
     }
 
     /// <summary>
