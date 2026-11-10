@@ -1,4 +1,5 @@
-﻿using Core.SevenZip;
+﻿using Core.FileSystem;
+using Core.SevenZip;
 
 namespace Core.Compression;
 
@@ -84,8 +85,5 @@ public static class VerificationHelpers
     private static string Normalize(string path) =>
         OperatingSystem.IsWindows() ? path.Replace('/', '\\') : path;
 
-    private static StringComparer PathComparer =>
-        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
+    private static StringComparer PathComparer => Paths.Comparer;
 }

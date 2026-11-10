@@ -71,6 +71,18 @@ IEnumerable<FileSystemNode> GetEffectiveUnits(FileSystemNode node, bool ancestor
 
 The reverse does not apply; if all subfolders of a folder are individually marked, compression is performed per-subfolder. The parent's compression pointer does not move up automatically.
 
+### Rules: Nearest Rule Wins
+
+Marks are stored as `JobRule`s (`Compress` or `Skip`). `JobBuilder` applies them so that each file and folder follows the **closest rule at or above it**:
+
+* A `Compress` rule whose nearest ruled ancestor is not `Compress` starts an item. One under another `Compress` is redundant (covered). With `Compress` rules only, this is exactly the DFS above.
+* A `Skip` rule inside a compressed folder excludes that subtree from the archive. It stays on disk unchanged. Example: compress `Projects` but skip `Projectsin`.
+* A `Compress` rule under such a `Skip` starts its own item again.
+
+Invalid rules are reported in the pre-flight report and ignored: paths that don't exist, are outside the root, are absolute, or are links/junctions, and paths with both `Compress` and `Skip` (both ignored).
+
+Each item is pre-scanned at build time (file count and bytes, using the same file listing as compression). Marked folders with no files are reported and get no item. A drive root can't be an item, because its archive would have nowhere to go.
+
 --- 
 
 ## Data Model
@@ -293,7 +305,9 @@ Either way, an item with a locked file never reaches `Done`, and its originals a
 
 * `RenameNew` append unique suffix to newly created archive (safe, recommended)
 * `Skip` leave the existing archive, skip this job item
-* `Overwrite` will cause issues if the archive is already open, may remove this option in implementation
+* ~~`Overwrite`~~: dropped; overwriting an archive that may be open or still needed is too risky.
+
+The output path is `<source>.7z` next to the source (for a file: `notes.txt.7z`). A path counts as taken if a file or folder exists there, another item already plans to use it, or a leftover `.7z.tmp` sits next to it. A leftover `.7z.tmp` is reported separately, and the item gets a suffixed name even under `Skip`, since compression refuses to touch a leftover.
 
 ---
 
@@ -435,7 +449,11 @@ Delete-after-verify will run between `Verified` and `Done`. Until it exists, `Ru
 
 ### Symlinks
 
-Skipped silently at job-build time. Logged in preflight report.
+Symbolic links and junctions are never followed, at job-build time or during compression; they are listed in the pre-flight report. This matters for old Windows profiles, which contain junctions such as `Application Data` that would otherwise be archived twice or loop forever.
+
+Other reparse points (e.g. OneDrive files, deduplicated files) are treated as normal files: skipping everything with the reparse-point attribute would silently drop real data.
+
+Hidden and system files are included.
 
 ### Empty Directory Chains
 
@@ -445,7 +463,7 @@ Open point: an empty subfolder *inside* a unit that does contain files is not st
 
 ### Lock Files
 
-Filter patterns like `*.tmp`, `~$*.docx`, `*.lck` at job-build time before pre-flight attempts to open them.
+Files matching `~$*`, `*.tmp`, `*.lck` and `*.lock` are skipped when listing a folder (`SourceEnumerator`), at build time and during compression. A file marked explicitly is archived even if its name matches.
 
 ### Interrupted Previous Run
 
@@ -657,6 +675,9 @@ Compressor/
 │   │   ├── BackupJob.cs
 │   │   ├── JobConfig.cs
 │   │   └── JobRule.cs
+│   ├── FileSystem/
+│   │   ├── Paths.cs                    // path comparison and normalization
+│   │   └── SourceEnumerator.cs         // file listing: links, lock files, exclusions
 │   ├── Planning/
 │   │   ├── JobBuilder.cs               // rules → effective units → JobItems
 │   │   └── JobFile.cs                  // JSON load / save

@@ -1,4 +1,5 @@
-﻿using Core.Models;
+﻿using Core.FileSystem;
+using Core.Models;
 using Core.SevenZip;
 
 namespace Core.Compression;
@@ -8,8 +9,6 @@ namespace Core.Compression;
 /// </summary>
 public static class CompressionHelpers
 {
-    private static readonly string[] LockFilePatterns = ["~$*", "*.tmp", "*.lck", "*.lock"];
-
     /// <summary>
     /// Compresses <paramref name="item"/> with 7-Zip into <c>&lt;OutputPath&gt;.tmp</c>, then renames it to <see cref="JobItem.OutputPath"/>.
     /// Does not change <see cref="JobItem.State"/>; the executor does that based on the returned outcome.
@@ -32,12 +31,8 @@ public static class CompressionHelpers
         List<ArchivedFile> files;
         try
         {
-            files = await Task.Run(() => CollectFiles(item)
-                .Select(path =>
-                {
-                    var info = new FileInfo(path);
-                    return new ArchivedFile(Path.GetRelativePath(sourceRoot, path), info.Length, info.LastWriteTimeUtc);
-                })
+            files = await Task.Run(() => CollectFiles(item, ct)
+                .Select(info => new ArchivedFile(Path.GetRelativePath(sourceRoot, info.FullName), info.Length, info.LastWriteTimeUtc))
                 .ToList(), ct);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -116,16 +111,21 @@ public static class CompressionHelpers
         public void Report(int value) => handler(value);
     }
 
-    public static IReadOnlyList<string> CollectFiles(JobItem item)
+    /// <summary>
+    /// The files to archive for <paramref name="item"/>, with the same rules the job builder used to pre-scan it.
+    /// Throws if a folder can't be listed or the source is gone.
+    /// </summary>
+    public static IReadOnlyList<FileInfo> CollectFiles(JobItem item, CancellationToken ct = default)
     {
-        IEnumerable<string> candidates = item.ItemKind == ItemKind.Directory
-            ? Directory.EnumerateFiles(item.SourcePath, "*", SearchOption.AllDirectories)
-            : [item.SourcePath];
+        if (item.ItemKind == ItemKind.Directory)
+            return SourceEnumerator.EnumerateFiles(item.SourcePath, item.ExcludedPaths, ct: ct).ToList();
 
-        return candidates
-            .Where(f => !IsSymlink(f))
-            .Where(f => !IsLockFile(f))
-            .ToList();
+        // An explicitly marked file is archived even if its name looks like a lock file.
+        var file = new FileInfo(item.SourcePath);
+        if (!file.Exists)
+            throw new FileNotFoundException($"Source file not found: {item.SourcePath}", item.SourcePath);
+
+        return SourceEnumerator.IsLink(file) ? [] : [file];
     }
     /// <summary>
     /// Attempts to open each file with a read handle to detect locks.
@@ -164,61 +164,10 @@ public static class CompressionHelpers
         }, ct);
     }
 
-    /// <summary>
-    /// Resolves the output path for a job item, applying the collision strategy if a .7z file already exists in the natural path.
-    /// </summary>
-    /// <param name="sourcePath"></param>
-    /// <param name="behavior"></param>
-    /// <returns></returns>
-    public static string ResolveOutputPath(string sourcePath, CollisionBehavior behavior)
-    {
-        var natural = $"{sourcePath.TrimEnd(Path.DirectorySeparatorChar)}.7z";
-        if (!File.Exists(natural))
-            return natural;
-
-        return behavior switch
-        {
-            CollisionBehavior.Skip => natural, // caller checks and skips
-            CollisionBehavior.RenameNew => FindAvailablePath(sourcePath),
-            _ => natural
-        };
-    }
-
     public static void CleanupTmp(JobItem item)
     {
         var tmp = $"{item.OutputPath}.tmp";
         try { if (File.Exists(tmp)) File.Delete(tmp); }
         catch { /* we did our best */ }
-    }
-
-    private static string FindAvailablePath(string sourcePath)
-    {
-        var i = 1;
-        string candidate;
-        do
-        {
-            candidate = sourcePath.TrimEnd(Path.DirectorySeparatorChar) + $"_{i:D3}.7z";
-            i++;
-        } while (File.Exists(candidate));
-        return candidate;
-    }
-    
-    private static bool IsSymlink(string path) =>
-        new FileInfo(path).Attributes.HasFlag(FileAttributes.ReparsePoint);
-
-    private static bool IsLockFile(string path)
-    {
-        string name = Path.GetFileName(path);
-        return LockFilePatterns.Any(pattern => FileNameMatchesPattern(name, pattern));
-    }
-
-    private static bool FileNameMatchesPattern(string name, string pattern)
-    {
-        if (pattern.StartsWith('*'))
-            return name.EndsWith(pattern[1..], StringComparison.OrdinalIgnoreCase);
-        
-        return pattern.EndsWith('*') 
-            ? name.StartsWith(pattern[..^1], StringComparison.OrdinalIgnoreCase) 
-            : string.Equals(name, pattern, StringComparison.OrdinalIgnoreCase);
     }
 }

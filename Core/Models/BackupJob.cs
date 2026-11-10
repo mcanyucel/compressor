@@ -1,4 +1,5 @@
 ﻿using System.Collections.Concurrent;
+using Core.FileSystem;
 using Core.Preflight;
 
 namespace Core.Models;
@@ -16,9 +17,9 @@ public sealed class BackupJob
     // ── Item Storage ──────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Keyed by normalized absolute path. OrdinalIgnoreCase because Windows paths are case-insensitive.
+    /// Keyed by normalized absolute path, compared like the file system does (case-insensitive on Windows and macOS).
     /// </summary>
-    public ConcurrentDictionary<string, JobItem> Items { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public ConcurrentDictionary<string, JobItem> Items { get; } = new(Paths.Comparer);
 
     /// <summary>
     /// Job item paths sorted descending by length (deepest-first).
@@ -66,27 +67,11 @@ public sealed class BackupJob
     {
         foreach (string path in SortedPaths)
         {
-            if (IsSameOrUnder(changedPath, path))
+            if (Paths.IsSameOrUnder(changedPath, path))
                 return Items[path];
         }
 
         return null;
-    }
-
-    /// <summary>
-    /// True if <paramref name="path"/> equals <paramref name="itemPath"/> or lies inside it.
-    /// A plain StartsWith would wrongly match <c>C:\docs\abc</c> against <c>C:\docs\a</c>.
-    /// </summary>
-    private static bool IsSameOrUnder(string path, string itemPath)
-    {
-        if (!path.StartsWith(itemPath, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (path.Length == itemPath.Length || Path.EndsInDirectorySeparator(itemPath))
-            return true;
-
-        char next = path[itemPath.Length];
-        return next == Path.DirectorySeparatorChar || next == Path.AltDirectorySeparatorChar;
     }
 
     // ── Lifecycle Transitions ─────────────────────────────────────────────────────────

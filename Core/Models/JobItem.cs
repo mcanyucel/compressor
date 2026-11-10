@@ -51,6 +51,12 @@ public sealed class JobItem
     /// Total file count inside this item, pre-scanned at job-build time.
     /// </summary>
     public int TotalFileCount { get; init; }
+
+    /// <summary>
+    /// Normalized full paths under <see cref="SourcePath"/> to leave out of the archive: subfolders with a Skip rule,
+    /// nested items, and their archives. Compared with <c>Paths.Comparer</c>.
+    /// </summary>
+    public IReadOnlySet<string> ExcludedPaths { get; init; } = new HashSet<string>();
     
     // ── Runtime State ─────────────────────────────────────────────────────────────
     // Written from background worker threads. <c>Volatile</c> ensures visibility across threads without a full lock. Enum is int-backed
